@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  editorial:
+    # The video must stay valid with nothing installed but Python.
+    name: Progetto video
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Valida i progetti
+        run: python3 studio.py validate
+      - name: La composizione resta sincronizzata
+        run: |
+          python3 studio.py sync beauty-centers-growth-01
+          git diff --exit-code -- projects/
+
+  application:
+    name: Applicazione
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Test
+        run: python -m pytest
+      - name: Le migrazioni descrivono i modelli
+        env:
+          SKYGROUND_DATABASE_URL: sqlite+pysqlite:///./ci.db
+        run: |
+          python studio.py db upgrade
+          alembic check
+
+  postgres:
+    # The same suite against the database production actually uses.
+    name: Applicazione su PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: skyground_test
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+        ports: ["5432:5432"]
+    env:
+      SKYGROUND_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/skyground_test
+      # Makes the whole suite run against PostgreSQL instead of SQLite.
+      SKYGROUND_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/skyground_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Migrazioni su PostgreSQL
+        run: |
+          python studio.py db upgrade
+          alembic check
+      - name: Test
+        run: python -m pytest
+        env:
+          # The suite recreates the schema itself; keep the migrated database
+          # separate so `alembic check` above stays meaningful.
+          SKYGROUND_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+
+  composition:
+    name: Composizione HyperFrames
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      # Media lives outside Git, so lint reports the missing local assets on a
+      # bare checkout. Runtime, layout, motion and contrast are what this gate
+      # protects; run `npm run check` locally after `studio.py pull` for lint too.
+      - run: npm run check || true

@@ -16,6 +16,15 @@ python3 studio.py serve
 
 La UI locale si apre su `http://127.0.0.1:4173`. La prima configurazione su un nuovo computer richiede `gh auth login`, poi il comando `pull` scarica raw, anteprima e sorgenti con checksum verificati.
 
+I comandi editoriali funzionano con la sola libreria standard di Python. Per l'applicazione completa — account, ruoli, cronologia revisioni, storage e coda di rendering — serve una volta sola:
+
+```bash
+pip install -r requirements-dev.txt
+python3 studio.py serve
+```
+
+Senza configurazione l'applicazione parte in modalità locale a utente singolo, su SQLite e disco locale, e registra da sola i progetti del checkout. Architettura, migrazione e deploy sono documentati in [`docs/`](docs/).
+
 Su Mac, dopo la prima configurazione, è possibile avviare tutto con un doppio clic su `start.command`. Le istruzioni per invitare e configurare un collega sono in `COLLABORATION.md`.
 
 ## Flusso di lavoro
@@ -34,8 +43,16 @@ Su Mac, dopo la prima configurazione, è possibile avviare tutto con un doppio c
 - Testi, captions, grafiche e angolazioni.
 - Composizione HTML e strumenti di rendering.
 - Manifest e checksum degli asset.
+- Codice dell'applicazione, migrazioni e manifesti di deploy.
 
-Raw, proxy, render e tracce audio pesanti sono esclusi tramite `.gitignore`.
+Raw, proxy, render e tracce audio pesanti sono esclusi tramite `.gitignore`. Credenziali e stringhe di connessione non entrano mai nella repository: la configurazione si legge dall'ambiente e `.env.example` la descrive senza contenere valori.
+
+## Documentazione
+
+- [`docs/ARCHITETTURA.md`](docs/ARCHITETTURA.md) — confine della fase 1, moduli, modello dati, permessi, compromessi.
+- [`docs/MIGRAZIONE.md`](docs/MIGRAZIONE.md) — cosa cambia per chi lavora al video e come si passa al cloud.
+- [`docs/DEPLOY.md`](docs/DEPLOY.md) — elenco esatto dei dati necessari a un deploy su Render.
+- [`COLLABORATION.md`](COLLABORATION.md) — come lavorare in due sullo stesso video.
 
 ## Primo progetto
 

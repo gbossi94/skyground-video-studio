@@ -17,4 +17,12 @@ __pycache__/
 *.pyc
 .env
 .env.*
+!.env.example
 node_modules/
+
+# Local application state: SQLite database and local object storage.
+.skyground/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
