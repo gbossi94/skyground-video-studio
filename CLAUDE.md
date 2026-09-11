@@ -1,6 +1,6 @@
 # Istruzioni per Claude
 
-Questa repository è la fonte modificabile dei video Skyground. Non trattare l’MP4 finale come sorgente editoriale: modifica i file strutturati del progetto.
+Questa repository è la fonte modificabile dei video Skyground e dell'app Skyground Video Studio. Claude è l'ambiente principale di sviluppo. Prima di intervenire sull'app leggi anche `CLAUDE_HANDOFF.md`; lavora su branch dedicati e lascia ogni incremento in una pull request revisionabile. Non trattare l’MP4 finale come sorgente editoriale: modifica i file strutturati del progetto.
 
 ## Prima di modificare
 
@@ -41,4 +41,3 @@ python3 studio.py serve
 ```
 
 Quando modifichi una timeline, aggiorna gli `output_start` in sequenza e la durata totale. Se cambi la durata, ricontrolla cards, captions e angles. Dopo un render, verifica sempre decodifica, dimensioni, frame rate, audio e durata.
-
