@@ -16,6 +16,8 @@ python3 studio.py serve
 
 La UI locale si apre su `http://127.0.0.1:4173`. La prima configurazione su un nuovo computer richiede `gh auth login`, poi il comando `pull` scarica raw, anteprima e sorgenti con checksum verificati.
 
+Su Mac, dopo la prima configurazione, è possibile avviare tutto con un doppio clic su `start.command`. Le istruzioni per invitare e configurare un collega sono in `COLLABORATION.md`.
+
 ## Flusso di lavoro
 
 1. Modifica `timeline.json`, `cards.json`, `captions.json`, `angles.json` o `brand.json` dalla UI oppure direttamente.
