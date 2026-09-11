@@ -1,0 +1,1 @@
+Skyground official fonts and purple. Approved intro retained. Single textual layer: captions suppressed throughout explanatory motion-graphics cards. Generated angles serve as brief inserts with original continuous voice. Four new angles: left eye-level, subtle low angle, gentle push-in, overhead pull-back. No fabricated metrics; 300 clients and 6 years follow recorded speech.

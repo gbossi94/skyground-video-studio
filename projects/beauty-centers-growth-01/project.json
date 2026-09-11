@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "beauty-centers-growth-01",
+  "name": "Skyground — Crescita centri estetici 01",
+  "client": "Skyground",
+  "status": "approved",
+  "language": "it",
+  "canvas": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "duration": 115.93333333333325
+  },
+  "files": {
+    "timeline": "timeline.json",
+    "captions": "captions.json",
+    "cards": "cards.json",
+    "angles": "angles.json",
+    "brand": "brand.json",
+    "audio": "audio.json",
+    "composition": "composition/index.html",
+    "preview": "preview.mp4"
+  },
+  "assets": {
+    "lockfile": "assets.lock.json",
+    "directory": "assets"
+  },
+  "render": {
+    "engine": "hyperframes",
+    "compositionId": "main",
+    "quality": "high",
+    "outputDirectory": "renders"
+  }
+}
+

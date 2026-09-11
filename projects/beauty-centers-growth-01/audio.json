@@ -1,0 +1,9 @@
+{
+  "master": {"targetLufs": -16, "truePeak": -1.8},
+  "voice": {"asset": "composition/voice.m4a", "targetLufs": -16},
+  "music": {"asset": "composition/music.mp3", "targetLufs": -32, "loop": true},
+  "effects": {"asset": "composition/sfx.wav"},
+  "renderedMix": "composition/soundtrack.m4a",
+  "ducking": {"threshold": 0.03, "ratio": 4, "attackMs": 15, "releaseMs": 280}
+}
+

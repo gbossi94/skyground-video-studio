@@ -1,0 +1,6 @@
+SKYGROUND — VIDEO COMPLETO
+Progetto HyperFrames, 1080x1920, 30 fps, 115.933 secondi.
+Aprire con HyperFrames Studio. File principale: index.html.
+Tutti i media e i font sono inclusi. La voce originale, musica ed effetti sono in soundtrack.m4a.
+Le angolazioni AI sono inserti brevi; i relativi video sono muti in timeline.
+Non sono necessarie credenziali Higgsfield per modificare o renderizzare questo progetto.

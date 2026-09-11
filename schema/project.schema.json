@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://skyground.ai/schemas/video-project-v1.json",
+  "title": "Skyground Video Project",
+  "type": "object",
+  "required": ["schemaVersion", "id", "name", "status", "canvas", "files"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "name": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["draft", "review", "approved", "published"] },
+    "canvas": {
+      "type": "object",
+      "required": ["width", "height", "fps", "duration"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "fps": { "type": "number", "exclusiveMinimum": 0 },
+        "duration": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "files": { "type": "object" }
+  }
+}

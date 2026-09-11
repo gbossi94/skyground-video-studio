@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Skyground Video Studio</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand"><span class="brand-mark">S</span><div><b>Skyground</b><small>Video Studio</small></div></div>
+        <p class="eyebrow">PROGETTI</p>
+        <div id="projects" class="projects"></div>
+        <div class="sidebar-note">I file JSON sono il montaggio. Claude, Codex e il team modificano la stessa sorgente.</div>
+      </aside>
+      <main>
+        <header>
+          <div><p class="eyebrow">EDITOR COLLABORATIVO</p><h1 id="title">Caricamento…</h1></div>
+          <div id="health" class="health">Verifica</div>
+        </header>
+        <section class="workspace">
+          <div class="preview-column">
+            <div class="phone"><video id="preview" controls playsinline></video></div>
+            <div id="metrics" class="metrics"></div>
+            <div id="issues" class="issues"></div>
+          </div>
+          <div class="editor-column">
+            <nav id="tabs" class="tabs"></nav>
+            <div class="editor-head">
+              <div><b id="file-title">Timeline</b><small id="file-help">Tagli e take selezionate</small></div>
+              <button id="save">Salva modifiche</button>
+            </div>
+            <textarea id="editor" spellcheck="false"></textarea>
+            <div id="message" class="message"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "provider": "github-release",
+  "repository": "gbossi94/skyground-video-studio",
+  "tag": "assets-v1",
+  "files": [
+    {
+      "name": "beauty-centers-growth-01-assets.zip",
+      "destination": "composition",
+      "check": "composition/source.mp4",
+      "archivePrefix": "composition/",
+      "sha256": "53fee3e287b1c4ceec71f4f3dfac84869a67ceeb0f4b215c6a62572a65b47f1d"
+    },
+    {
+      "name": "Skyground-Video-Completo-01.mp4",
+      "destination": "preview.mp4",
+      "check": "preview.mp4",
+      "sha256": "f57986e3318b00ba0d67a91679964e03c38b7bf75eb5fd21c69acd703c05a203"
+    },
+    {
+      "name": "skyground-beauty-centers-raw.mov",
+      "destination": "assets/raw.mov",
+      "check": "assets/raw.mov",
+      "sha256": "253519eed928d5a66d15244a4631856e33ee7877274c877f0346859eed66b35f"
+    }
+  ]
+}

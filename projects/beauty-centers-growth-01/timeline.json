@@ -1,0 +1,178 @@
+{
+  "source": "assets/raw.mov",
+  "clips": [
+    {
+      "start": 4.5,
+      "end": 10.033333333333333,
+      "label": "Apertura, prima take completa",
+      "output_start": 0,
+      "original_segment": 0
+    },
+    {
+      "start": 27.4,
+      "end": 32.36666666666667,
+      "label": "Metafora e frustrazione",
+      "output_start": 5.533333333333333,
+      "original_segment": 1
+    },
+    {
+      "start": 41.56666666666667,
+      "end": 45.8,
+      "label": "Assunzione",
+      "output_start": 10.500000000000002,
+      "original_segment": 2
+    },
+    {
+      "start": 47.93333333333333,
+      "end": 51.56666666666667,
+      "label": "Stipendio",
+      "output_start": 14.733333333333329,
+      "original_segment": 3
+    },
+    {
+      "start": 70.63333333333334,
+      "end": 75.3,
+      "label": "Blocco operativo, take completa",
+      "output_start": 18.366666666666667,
+      "original_segment": 4
+    },
+    {
+      "start": 77.93333333333334,
+      "end": 79.43333333333334,
+      "label": "Via di uscita",
+      "output_start": 23.033333333333324,
+      "original_segment": 5
+    },
+    {
+      "start": 85.63333333333334,
+      "end": 88.53333333333333,
+      "label": "Scommessa",
+      "output_start": 24.533333333333324,
+      "original_segment": 6
+    },
+    {
+      "start": 107.43333333333334,
+      "end": 112.06666666666666,
+      "label": "Clienti desiderati",
+      "output_start": 27.433333333333316,
+      "original_segment": 8
+    },
+    {
+      "start": 114.16666666666667,
+      "end": 120.33333333333333,
+      "label": "Estetica di base e prezzi",
+      "output_start": 32.06666666666664,
+      "original_segment": 9
+    },
+    {
+      "start": 196.53333333333333,
+      "end": 207.06666666666666,
+      "label": "Online, seconda take completa",
+      "output_start": 38.2333333333333,
+      "original_segment": 10
+    },
+    {
+      "start": 211.36666666666667,
+      "end": 217.36666666666667,
+      "label": "Tecnologie",
+      "output_start": 48.76666666666663,
+      "original_segment": 11
+    },
+    {
+      "start": 219.93333333333334,
+      "end": 225.6,
+      "label": "Open day",
+      "output_start": 54.76666666666663,
+      "original_segment": 12
+    },
+    {
+      "start": 231.66666666666666,
+      "end": 235.3,
+      "label": "Ogni scelta è una scommessa",
+      "output_start": 60.43333333333329,
+      "original_segment": 13
+    },
+    {
+      "start": 236.06666666666666,
+      "end": 237.96666666666667,
+      "label": "Anche non agire",
+      "output_start": 64.06666666666663,
+      "original_segment": 14
+    },
+    {
+      "start": 244.03333333333333,
+      "end": 246.93333333333334,
+      "label": "Contro te stessa, take corretta",
+      "output_start": 65.96666666666664,
+      "original_segment": 15
+    },
+    {
+      "start": 256.93333333333334,
+      "end": 265.76666666666665,
+      "label": "Proposta",
+      "output_start": 68.86666666666665,
+      "original_segment": 16
+    },
+    {
+      "start": 268.93333333333334,
+      "end": 271.3,
+      "label": "Facilità",
+      "output_start": 77.69999999999996,
+      "original_segment": 17
+    },
+    {
+      "start": 274.6333333333333,
+      "end": 278.1333333333333,
+      "label": "Partner, seconda take",
+      "output_start": 80.06666666666663,
+      "original_segment": 19
+    },
+    {
+      "start": 287.53333333333336,
+      "end": 295.06666666666666,
+      "label": "Credibilità",
+      "output_start": 83.56666666666663,
+      "original_segment": 20
+    },
+    {
+      "start": 296.6,
+      "end": 299.26666666666665,
+      "label": "Esperienza",
+      "output_start": 91.09999999999994,
+      "original_segment": 21
+    },
+    {
+      "start": 302.73333333333335,
+      "end": 303.8666666666667,
+      "label": "Pensaci bene",
+      "output_start": 93.76666666666657,
+      "original_segment": 22
+    },
+    {
+      "start": 330.2,
+      "end": 332.43333333333334,
+      "label": "Rassicurazione, seconda take",
+      "output_start": 94.89999999999989,
+      "original_segment": 23
+    },
+    {
+      "start": 334.46666666666664,
+      "end": 349.26666666666665,
+      "label": "Call, seconda take completa",
+      "output_start": 97.13333333333324,
+      "original_segment": 24
+    },
+    {
+      "start": 350.53333333333336,
+      "end": 354.53333333333336,
+      "label": "Invito e saluto",
+      "output_start": 111.93333333333325,
+      "original_segment": 25
+    }
+  ],
+  "corrections": [
+    "Eliminato primo tentativo interrotto sui clienti buoni (103.13–106.73). Conservata la ripartenza completa.",
+    "Eliminato frammento del tentativo precedente a ti basta trovare (272.83–273.37). Conservata la take completa da 274.63."
+  ],
+  "duration": 115.93333333333325
+}

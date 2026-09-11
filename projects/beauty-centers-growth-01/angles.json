@@ -1,0 +1,73 @@
+[
+  {
+    "id": "existing",
+    "asset": "composition/angle-existing.mp4",
+    "start": 3.1,
+    "duration": 1.6,
+    "mediaStart": 3.1,
+    "track": 2,
+    "enabled": true,
+    "description": "Prima angolazione approvata"
+  },
+  {
+    "id": "clients",
+    "asset": "composition/angle-clients.mp4",
+    "start": 28.2,
+    "duration": 2.2,
+    "mediaStart": 0.766667,
+    "track": 3,
+    "enabled": true,
+    "higgsfieldJob": "3ec714a6-4a20-429a-a8a2-432a79b36504",
+    "credits": 41.74,
+    "description": "35 gradi a sinistra, altezza occhi"
+  },
+  {
+    "id": "overhead",
+    "asset": "composition/angle-overhead.mp4",
+    "start": 49.0,
+    "duration": 2.2,
+    "mediaStart": 0.233333,
+    "track": 3,
+    "enabled": true,
+    "higgsfieldJob": "dac0c1b9-f46c-4aa5-9794-64cb374f2f99",
+    "credits": 54.05,
+    "description": "Ripresa elevata diagonale con leggero pull-back"
+  },
+  {
+    "id": "lowproof",
+    "asset": "composition/angle-lowproof.mp4",
+    "start": 85.1,
+    "duration": 1.95,
+    "mediaStart": 1.533333,
+    "track": 3,
+    "enabled": true,
+    "higgsfieldJob": "638e5882-58c4-4a68-8974-ea10a7468aa0",
+    "credits": 47.74,
+    "description": "20 gradi a destra, camera leggermente bassa"
+  },
+  {
+    "id": "call",
+    "asset": "composition/angle-call.mp4",
+    "start": 99.4,
+    "duration": 2.1,
+    "mediaStart": 2.266667,
+    "track": 3,
+    "enabled": true,
+    "higgsfieldJob": "7d6fc2db-dd20-4686-b120-8f5be8364a0a",
+    "credits": 55.85,
+    "description": "25 gradi a sinistra con push-in leggero"
+  },
+  {
+    "id": "decision",
+    "asset": null,
+    "start": 61.0,
+    "duration": 2.2,
+    "mediaStart": 0.566667,
+    "track": 3,
+    "enabled": false,
+    "higgsfieldJob": "e00dbcc1-e781-44af-b220-c0e17b0e0f6f",
+    "credits": 36,
+    "description": "Generazione bloccata dal filtro; non usare"
+  }
+]
+

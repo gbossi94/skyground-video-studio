@@ -1,0 +1,20 @@
+{
+  "name": "Skyground",
+  "colors": {
+    "primary": "#5c0bfe",
+    "paper": "#f4f5f0",
+    "ink": "#141414",
+    "accentLight": "#cdbaff"
+  },
+  "fonts": {
+    "sans": {"family": "Jakarta", "file": "composition/sans.ttf"},
+    "serif": {"family": "Instrument", "file": "composition/serif.ttf"}
+  },
+  "rules": [
+    "Motion graphics e captions non devono duplicare lo stesso messaggio nello stesso momento.",
+    "Il viola Skyground è il colore di enfasi principale.",
+    "Il brand compare soltanto quando serve alla CTA o all’identità del contenuto.",
+    "Non mostrare header o watermark tecnici."
+  ]
+}
+

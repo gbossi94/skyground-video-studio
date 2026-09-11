@@ -1,0 +1,20 @@
+# Large media is distributed through private release assets / object storage.
+projects/*/assets/*
+projects/*/composition/*.mp4
+projects/*/composition/*.m4a
+projects/*/composition/*.wav
+projects/*/composition/*.mp3
+projects/*/composition/cards.json
+projects/*/composition/captions.json
+projects/*/preview.mp4
+projects/*/renders/*
+
+!projects/*/assets/.gitkeep
+!projects/*/renders/.gitkeep
+
+.DS_Store
+__pycache__/
+*.pyc
+.env
+.env.*
+node_modules/

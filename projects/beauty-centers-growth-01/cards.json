@@ -1,0 +1,146 @@
+[
+  {
+    "id": "team",
+    "a": 12.08,
+    "b": 14.65,
+    "label": "IL PROSSIMO PASSO",
+    "body": "<div class=\"iconrow\"><div class=\"person\"></div><b class=\"plus\">+</b><div class=\"person outline\"></div></div><div class=\"ctitle\">Far crescere il team.</div>",
+    "kind": "split"
+  },
+  {
+    "id": "salary",
+    "a": 16.34,
+    "b": 18.36,
+    "label": "PRIMA DI TUTTO",
+    "body": "<div class=\"wallet\"><i></i><b>€</b></div><div class=\"ctitle\">Il tuo stipendio.</div>",
+    "kind": "split"
+  },
+  {
+    "id": "hours",
+    "a": 18.87,
+    "b": 23.03,
+    "label": "IL LAVORO QUOTIDIANO",
+    "body": "<div class=\"bignum\">12<span>ore</span></div><div class=\"meter\"><i></i></div><div class=\"ctitle\">Tutto il giorno in cabina.</div>",
+    "kind": "split"
+  },
+  {
+    "id": "choices",
+    "a": 24.7,
+    "b": 27.43,
+    "label": "TRE STRADE",
+    "body": "<div class=\"choices\"><div>01<span>CLIENTI</span></div><div>02<span>ONLINE</span></div><div>03<span>TECNOLOGIE</span></div></div>",
+    "kind": "split"
+  },
+  {
+    "id": "value",
+    "a": 33,
+    "b": 37.95,
+    "label": "CAMBIARE IL MODELLO",
+    "body": "<div class=\"rowline strike\">Solo operatività</div><div class=\"rowline strike\">Estetica di base</div><div class=\"rowline accent\">Più valore per cliente ↑</div>",
+    "kind": "split"
+  },
+  {
+    "id": "social",
+    "a": 40.44,
+    "b": 44.95,
+    "label": "PUBBLICARE CONTENUTI",
+    "body": "<div class=\"phone\"><div class=\"phhead\">IL TUO CENTRO <i>●</i></div><div class=\"phimage\"><span>✦</span></div><div class=\"phfoot\">♡ &nbsp; ◯ &nbsp; ↗</div></div><div class=\"socialwords\"><span>Un post.</span><span>Un altro post.</span><span>E poi?</span></div>",
+    "kind": "split"
+  },
+  {
+    "id": "conversion",
+    "a": 45.6,
+    "b": 48.7,
+    "label": "IL PUNTO",
+    "body": "<div class=\"statement\">Visibilità</div><div class=\"notEqual\">≠</div><div class=\"statement accent\">Nuovi clienti</div>",
+    "kind": "full"
+  },
+  {
+    "id": "rates",
+    "a": 51.3,
+    "b": 54.7,
+    "label": "L’INVESTIMENTO",
+    "body": "<div class=\"billstack\"><div>RATA <span>€</span></div><div>RATA <span>€</span></div><div>RATA <span>€</span></div></div><div class=\"ctitle\">Quanto pesa ogni mese?</div>",
+    "kind": "split"
+  },
+  {
+    "id": "openday",
+    "a": 55.15,
+    "b": 60.3,
+    "label": "LA PROMESSA",
+    "body": "<div class=\"ticket\"><span>OPEN DAY</span><b>↗</b></div><div class=\"rowline\">Si ripaga la macchina.</div><div class=\"rowline accent\">E i clienti?</div>",
+    "kind": "split"
+  },
+  {
+    "id": "risk",
+    "a": 63.3,
+    "b": 65.95,
+    "label": "ANCHE ASPETTARE È UNA SCELTA",
+    "body": "<div class=\"choices two\"><div>AGIRE<span>UNA SCOMMESSA</span></div><div>ASPETTARE<span>UNA SCOMMESSA</span></div></div>",
+    "kind": "split"
+  },
+  {
+    "id": "against",
+    "a": 66.39,
+    "b": 68.86,
+    "label": "IL RISCHIO",
+    "body": "<div class=\"statement\">Scommettere</div><div class=\"statement\">contro</div><div class=\"statement italic\">te stessa.</div>",
+    "kind": "full"
+  },
+  {
+    "id": "sell",
+    "a": 71.47,
+    "b": 77.69,
+    "label": "LA DIREZIONE",
+    "body": "<div class=\"flowbox\">NUOVI CLIENTI</div><div class=\"flowarrow\">↓</div><div class=\"flowbox strong\">PIÙ VENDITE</div>",
+    "kind": "split"
+  },
+  {
+    "id": "partner",
+    "a": 80.41,
+    "b": 83.4,
+    "label": "LA SCELTA DEL PARTNER",
+    "body": "<div class=\"target\"><i></i><b>✓</b></div><div class=\"ctitle\">Quello giusto per te.</div>",
+    "kind": "split"
+  },
+  {
+    "id": "proof",
+    "a": 87.09,
+    "b": 90.9,
+    "label": "ESPERIENZA SUL CAMPO",
+    "body": "<div class=\"bignum\">300<span>+</span></div><div class=\"ctitle\">clienti attivi</div><div class=\"fine\">Un titolare con il proprio centro estetico.</div>",
+    "kind": "split"
+  },
+  {
+    "id": "years",
+    "a": 91.3,
+    "b": 93.7,
+    "label": "OGNI GIORNO",
+    "body": "<div class=\"bignum\">6<span>anni</span></div><div class=\"meter\"><i></i></div><div class=\"ctitle\">di lavoro sul campo.</div>",
+    "kind": "split"
+  },
+  {
+    "id": "callfree",
+    "a": 97.133,
+    "b": 99.35,
+    "label": "IL PRIMO PASSO",
+    "body": "<div class=\"ctitle\">Una call conoscitiva.</div><div class=\"badge\">GRATUITA</div>",
+    "kind": "split"
+  },
+  {
+    "id": "plan",
+    "a": 104.41,
+    "b": 108.4,
+    "label": "SE POSSIAMO AIUTARTI",
+    "body": "<div class=\"bignum\">90<span>giorni</span></div><div class=\"steps\"><i></i><i></i><i></i><i></i></div><div class=\"ctitle\">Un piano per la tua attività.</div>",
+    "kind": "split"
+  },
+  {
+    "id": "cta",
+    "a": 112.0,
+    "b": 115.93333333333325,
+    "label": "SKYGROUND",
+    "body": "<div class=\"statement\">Facciamo il</div><div class=\"statement italic\">prossimo passo.</div><div class=\"ctaButton\">PRENOTA LA CALL &nbsp; ↗</div><div class=\"fine\">skyground.ai</div>",
+    "kind": "full"
+  }
+]
