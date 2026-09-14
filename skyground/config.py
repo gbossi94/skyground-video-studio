@@ -93,6 +93,15 @@ class Settings:
     port: int = 4173
     cookie_secure: bool = False
     allowed_origins: tuple[str, ...] = ()
+    #: Speech to text: 'local' (Whisper in the worker), 'deepgram', or
+    #: 'fixture:<path>' to replay a transcript that already exists.
+    transcription_provider: str = "local"
+    transcription_model: str = "small"
+    transcription_api_key: str = ""
+    #: Adviser used to spot reformulations the word comparison cannot see.
+    adviser_provider: str = "none"
+    adviser_model: str = "claude-opus-5"
+    adviser_api_key: str = ""
     worker_poll_seconds: float = 2.0
     worker_job_timeout_seconds: int = 3600
     #: False when `secret_key` is the derived development key rather than a
@@ -189,6 +198,12 @@ def load_settings(environ: dict | None = None) -> Settings:
         port=_int("PORT", _int("SKYGROUND_PORT", 4173)),
         cookie_secure=_flag("SKYGROUND_COOKIE_SECURE", environment == PRODUCTION),
         allowed_origins=tuple(item.strip() for item in origins.split(",") if item.strip()),
+        transcription_provider=_env("SKYGROUND_TRANSCRIPTION_PROVIDER", "local") or "local",
+        transcription_model=_env("SKYGROUND_TRANSCRIPTION_MODEL", "small") or "small",
+        transcription_api_key=_env("SKYGROUND_TRANSCRIPTION_API_KEY", "") or "",
+        adviser_provider=_env("SKYGROUND_ADVISER_PROVIDER", "none") or "none",
+        adviser_model=_env("SKYGROUND_ADVISER_MODEL", "claude-opus-5") or "claude-opus-5",
+        adviser_api_key=_env("SKYGROUND_ADVISER_API_KEY", "") or "",
         worker_poll_seconds=float(_env("SKYGROUND_WORKER_POLL_SECONDS", "2") or 2),
         worker_job_timeout_seconds=_int("SKYGROUND_WORKER_JOB_TIMEOUT_SECONDS", 3600),
         secret_key_is_explicit=secret_is_explicit,
