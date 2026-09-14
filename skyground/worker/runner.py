@@ -32,6 +32,23 @@ from skyground.storage import ObjectStorage, build_storage
 
 logger = logging.getLogger("skyground.worker")
 
+#: How a preview proxy is encoded. Half height keeps scrubbing responsive and
+#: the file small enough to stream over a hotel connection.
+PROXY_FORMATS = {
+    "h264": (
+        "source.mp4",
+        "video/mp4",
+        ("-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"),
+    ),
+    "vp9": (
+        "source.webm",
+        "video/webm",
+        ("-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "34", "-deadline", "realtime",
+         "-cpu-used", "8", "-row-mt", "1", "-pix_fmt", "yuv420p", "-c:a", "libopus", "-b:a", "96k"),
+    ),
+}
+
 
 class NotSupported(StudioError):
     """Raised by a handler that cannot run yet: the job fails without retrying."""
@@ -58,10 +75,11 @@ class Worker:
         self.kinds = kinds
         self.running = False
         self.handlers: dict[str, Callable[[Session, RenderJob, Project], dict]] = {
+            "analyze": self.handle_analyze,
             "validate": self.handle_validate,
             "sync": self.handle_sync,
             "render": self.handle_render,
-            "proxy": self.handle_unsupported,
+            "proxy": self.handle_proxy,
             "transcribe": self.handle_unsupported,
         }
 
@@ -123,6 +141,58 @@ class Worker:
 
     # --------------------------------------------------------------- handlers
 
+    def handle_analyze(self, session: Session, job: RenderJob, project: Project) -> dict:
+        """Transcribe the raw take and store what was heard.
+
+        The slow step of the whole product — minutes of audio through a model —
+        so it happens once, in the worker, and every later proposal is rebuilt
+        from the stored result in milliseconds.
+        """
+        from skyground.analysis import pipeline
+        from skyground.analysis.transcription import build_transcriber
+        from skyground.services import cuts
+
+        source = self._source_for(session, project, job)
+        analysis = pipeline.analyze(
+            source,
+            transcriber=build_transcriber(self.settings),
+            language=(project.settings or {}).get("language", "it"),
+            source_label=str(job.payload.get("source") or source.name),
+        )
+        cuts.save_analysis(session, project, analysis)
+        plan = cuts.propose(session, project)
+        return {
+            "words": len(analysis.words),
+            "duration": analysis.duration,
+            "provider": analysis.provider,
+            "proposal": plan.stats(),
+        }
+
+    def _source_for(self, session: Session, project: Project, job: RenderJob):
+        """Find the raw take: in the checkout, or pulled down from storage."""
+        import pathlib
+        import tempfile
+
+        relative = job.payload.get("source") or self._timeline_source(session, project)
+        if self.workspace.exists(project.slug):
+            candidate = self.workspace.project_dir(project.slug) / relative
+            if candidate.is_file():
+                return candidate
+
+        from skyground.services import assets as asset_service
+
+        key = asset_service.object_key(project, relative)
+        if not self.storage.exists(key):
+            raise NotSupported(
+                f"il girato {relative} non è né nel workspace né nello storage"
+            )
+        target = pathlib.Path(tempfile.gettempdir()) / "skyground" / project.slug / relative
+        return self.storage.download(key, target)
+
+    def _timeline_source(self, session: Session, project: Project) -> str:
+        timeline = DocumentService(session, self.workspace).read(project, "timeline.json")
+        return (timeline.content or {}).get("source") or "assets/raw.mov"
+
     def handle_validate(self, session: Session, job: RenderJob, project: Project) -> dict:
         problems = DocumentService(session, self.workspace).problems(project)
         return {"problems": problems, "valid": not problems}
@@ -155,6 +225,41 @@ class Worker:
             meta={"job": job.id},
         )
         return {"output": output.name, "key": key, "size": stored.size}
+
+    def handle_proxy(self, session: Session, job: RenderJob, project: Project) -> dict:
+        """Make a copy the browser can actually play.
+
+        The camera original is HEVC in a .mov: no browser will decode it, so
+        without this the editor shows a black rectangle and the timeline is
+        useless. The proxy is half resolution H.264 with a moved index, which is
+        what makes scrubbing feel immediate.
+        """
+        import pathlib
+        import subprocess
+        import tempfile
+
+        from skyground.core.workspace import find_ffmpeg
+        from skyground.services import assets as asset_service
+
+        source = self._source_for(session, project, job)
+        name, media_type, encoder = PROXY_FORMATS.get(
+            self.settings.proxy_codec, PROXY_FORMATS["h264"]
+        )
+        with tempfile.TemporaryDirectory(prefix="skyground-proxy-") as temporary:
+            output = pathlib.Path(temporary) / name
+            subprocess.run(
+                [find_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
+                 "-vf", "scale=-2:960", *encoder, str(output)],
+                check=True,
+            )
+            key = asset_service.object_key(project, f"proxy/{name}")
+            stored = self.storage.put_file(key, output, media_type)
+
+        asset_service.register(
+            session, project, key=key, kind="proxy", size=stored.size,
+            sha256=stored.sha256, content_type="video/mp4", meta={"job": job.id},
+        )
+        return {"key": key, "size": stored.size}
 
     def handle_unsupported(self, session: Session, job: RenderJob, project: Project) -> dict:
         raise NotSupported(

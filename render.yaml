@@ -35,6 +35,18 @@ envVarGroups:
         sync: false
       - key: SKYGROUND_S3_REGION
         value: auto
+      # Speech to text for the automatic cut. Leave the provider unset to run
+      # Whisper inside the worker instead of paying per minute.
+      - key: SKYGROUND_TRANSCRIPTION_PROVIDER
+        value: deepgram
+      - key: SKYGROUND_TRANSCRIPTION_API_KEY
+        sync: false
+      # Optional: spots reformulations the word comparison cannot see. It only
+      # ever raises questions, so the pipeline works without it.
+      - key: SKYGROUND_ADVISER_PROVIDER
+        value: none
+      - key: SKYGROUND_ADVISER_API_KEY
+        sync: false
       - key: SKYGROUND_S3_ACCESS_KEY_ID
         sync: false
       - key: SKYGROUND_S3_SECRET_ACCESS_KEY

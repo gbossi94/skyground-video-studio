@@ -128,7 +128,7 @@ def _origin_allowed(origin: str, request: Request, settings: Settings) -> bool:
 
 
 def register_routes(app: FastAPI) -> None:
-    from skyground.api.routes import assets, auth, jobs, media, projects
+    from skyground.api.routes import assets, auth, cut, jobs, media, projects
 
     @app.get("/api/health")
     @app.get("/healthz")
@@ -146,6 +146,7 @@ def register_routes(app: FastAPI) -> None:
     app.include_router(projects.router)
     app.include_router(assets.router)
     app.include_router(jobs.router)
+    app.include_router(cut.router)
     app.include_router(media.router)
 
     if WEB_ROOT.is_dir():
@@ -154,6 +155,19 @@ def register_routes(app: FastAPI) -> None:
         @app.get("/")
         def index() -> FileResponse:
             return FileResponse(WEB_ROOT / "index.html")
+
+        @app.get("/app")
+        @app.get("/app/")
+        def editor():
+            """The React editor. Built into `web/app`; absent in a checkout that
+            has not run `npm run build`, which must not break the panel."""
+            page = WEB_ROOT / "app" / "index.html"
+            if not page.is_file():
+                return JSONResponse(
+                    {"error": "l'editor non è compilato: esegui `npm run build` in app/"},
+                    status_code=503,
+                )
+            return FileResponse(page)
 
         @app.get("/{filename:path}")
         def panel(filename: str):

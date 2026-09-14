@@ -135,3 +135,33 @@ def test_the_engine_holds_on_the_real_take():
     # It asked about the repeated openings rather than choosing one.
     assert plan.open_questions
     assert plan.status == "draft"
+
+
+# ----------------------------------------------------------------- the proxy
+
+
+def test_the_proxy_defaults_to_the_codec_every_browser_decodes():
+    """The camera original is HEVC in a .mov, which no browser plays. The
+    preview only exists because the worker makes a copy that does."""
+    from skyground.worker.runner import PROXY_FORMATS
+
+    name, media_type, encoder = PROXY_FORMATS[load_settings({}).proxy_codec]
+    assert (name, media_type) == ("source.mp4", "video/mp4")
+    assert "libx264" in encoder
+    assert "+faststart" in encoder  # the index up front, so scrubbing starts at once
+
+
+def test_an_open_codec_is_available_for_builds_without_the_licensed_one():
+    from skyground.worker.runner import PROXY_FORMATS
+
+    name, media_type, encoder = PROXY_FORMATS[
+        load_settings({"SKYGROUND_PROXY_CODEC": "vp9"}).proxy_codec
+    ]
+    assert (name, media_type) == ("source.webm", "video/webm")
+    assert "libvpx-vp9" in encoder
+
+
+def test_an_unknown_codec_falls_back_instead_of_failing_the_job():
+    from skyground.worker.runner import PROXY_FORMATS
+
+    assert PROXY_FORMATS.get(load_settings({"SKYGROUND_PROXY_CODEC": "boh"}).proxy_codec) is None

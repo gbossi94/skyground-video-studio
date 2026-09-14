@@ -20,9 +20,13 @@ __pycache__/
 !.env.example
 node_modules/
 
+# Build output of the React editor; produced by `npm run build` in app/.
+web/app/
+
 # Local application state: SQLite database and local object storage.
 .skyground/
 .venv/
 venv/
 .pytest_cache/
 .ruff_cache/
+app/tsconfig.tsbuildinfo

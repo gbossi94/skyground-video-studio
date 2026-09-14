@@ -28,7 +28,7 @@ from skyground.errors import NotFound, ValidationError
 from skyground.services import audit
 
 #: Work the worker knows how to run. Phase 3 extends this list.
-JOB_KINDS = ("render", "sync", "validate", "proxy", "transcribe")
+JOB_KINDS = ("render", "sync", "validate", "analyze", "proxy", "transcribe")
 
 RETRY_BACKOFF_SECONDS = (30, 120, 600)
 
