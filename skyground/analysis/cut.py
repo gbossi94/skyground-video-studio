@@ -385,6 +385,8 @@ def _take_question(
                 label=utterance.text[:90],
                 detail=detail,
                 recommended=(index == best),
+                start=utterance.start,
+                end=utterance.end,
             )
         )
     options.append(
@@ -416,11 +418,15 @@ def _suspect_question(
             label=f"Tenere la seconda: {utterances[second].text[:80]}",
             detail=f"{utterances[second].start:.2f}–{utterances[second].end:.2f}s",
             recommended=True,
+            start=utterances[second].start,
+            end=utterances[second].end,
         ),
         Option(
             id=f"utterance:{first}",
             label=f"Tenere la prima: {utterances[first].text[:80]}",
             detail=f"{utterances[first].start:.2f}–{utterances[first].end:.2f}s",
+            start=utterances[first].start,
+            end=utterances[first].end,
         ),
         Option(id="keep-both", label="Tenerle entrambe", detail="Dicono cose diverse."),
     ]
@@ -452,11 +458,17 @@ def _pause_question(start: float, end: float, gap: float, words, index: int) -> 
                 label="Tagliarla",
                 detail="Resta il respiro minimo previsto dalla policy.",
                 recommended=True,
+                # Entrambe le opzioni riguardano lo stesso silenzio, con un po'
+                # di parlato intorno: senza contesto una pausa non si giudica.
+                start=max(0.0, start - 2.0),
+                end=end + 2.0,
             ),
             Option(
                 id="keep",
                 label="Tenerla intera",
                 detail="È un silenzio voluto, fa parte della battuta.",
+                start=max(0.0, start - 2.0),
+                end=end + 2.0,
             ),
         ],
     )

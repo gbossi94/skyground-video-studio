@@ -37,6 +37,10 @@ export interface Option {
   label: string;
   detail: string;
   recommended: boolean;
+  /** The piece of source this option is about, when it is about one. Present
+   *  so the option can be *heard* rather than read. */
+  start?: number;
+  end?: number;
 }
 
 export type QuestionKind =

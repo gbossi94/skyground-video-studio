@@ -271,14 +271,24 @@ class Option:
     detail: str = ""
     #: Marked as what the engine would do, but never applied on its own.
     recommended: bool = False
+    #: The piece of source this option is about, when it is about one. Nobody
+    #: can choose between two takes by reading them: the interface needs the
+    #: range in order to play it, and a timestamp written inside `detail` is
+    #: prose, not data.
+    start: float | None = None
+    end: float | None = None
 
     def as_dict(self) -> dict:
-        return {
+        payload = {
             "id": self.id,
             "label": self.label,
             "detail": self.detail,
             "recommended": self.recommended,
         }
+        if self.start is not None and self.end is not None:
+            payload["start"] = round(self.start, 3)
+            payload["end"] = round(self.end, 3)
+        return payload
 
     @staticmethod
     def from_dict(value: dict) -> Option:
@@ -287,6 +297,8 @@ class Option:
             label=value["label"],
             detail=value.get("detail", ""),
             recommended=bool(value.get("recommended", False)),
+            start=value.get("start"),
+            end=value.get("end"),
         )
 
 

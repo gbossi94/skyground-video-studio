@@ -1,4 +1,4 @@
-import type { Question } from "../types";
+import type { Option, Question } from "../types";
 import { formatTime } from "./Timeline";
 
 const KIND_LABEL: Record<string, string> = {
@@ -13,96 +13,139 @@ interface Props {
   questions: Question[];
   selected: Question | null;
   busy: string | null;
+  playingOption: string | null;
   onSelect: (question: Question) => void;
   onAnswer: (question: Question, optionId: string) => void;
+  onListen: (question: Question, option: Option) => void;
 }
 
-/** The heart of the screen. Everything the engine refused to decide shows up
- *  here, and the plan stays unapplicable until this list is empty. */
-export function Questions({ questions, selected, busy, onSelect, onAnswer }: Props) {
+/** The heart of the screen. Everything the engine refused to decide comes here,
+ *  and the plan stays unapplicable until none is left.
+ *
+ *  One question at a time, on purpose: six of them stacked made a page two
+ *  screens tall, which meant scrolling away from the video you need in order to
+ *  answer. Deciding is the work; everything else is context. */
+export function Questions({
+  questions,
+  selected,
+  busy,
+  playingOption,
+  onSelect,
+  onAnswer,
+  onListen,
+}: Props) {
   const open = questions.filter((question) => !question.resolved);
   const answered = questions.filter((question) => question.resolved);
+  const current = selected && !selected.resolved ? selected : open[0] ?? null;
+  const position = current ? open.findIndex((question) => question.id === current.id) : -1;
+
+  if (!current) {
+    return (
+      <aside className="decide decide-clear">
+        <p className="eyebrow">DA DECIDERE</p>
+        <h2>Nessuna ambiguità</h2>
+        <p className="hint">
+          {answered.length > 0
+            ? `${answered.length} decise. Il montaggio si può applicare.`
+            : "Il motore non ha trovato casi dubbi: il montaggio si può applicare."}
+        </p>
+        {answered.length > 0 && <Answered questions={answered} onSelect={onSelect} />}
+      </aside>
+    );
+  }
 
   return (
-    <aside className="questions">
-      <header>
-        <p className="eyebrow">DA DECIDERE</p>
-        <h2>
-          {open.length === 0 ? "Nessuna ambiguità" : `${open.length} ${open.length === 1 ? "domanda" : "domande"}`}
-        </h2>
-        <p className="hint">
-          {open.length === 0
-            ? "Il montaggio si può applicare."
-            : "Il montaggio non viene applicato finché restano decisioni aperte."}
-        </p>
+    <aside className="decide">
+      <header className="decide-head">
+        <div>
+          <p className="eyebrow">
+            DA DECIDERE · {position + 1} di {open.length}
+          </p>
+          <h2>{current.prompt}</h2>
+        </div>
+        <nav className="decide-nav">
+          <button
+            className="ghost small"
+            disabled={position <= 0}
+            onClick={() => onSelect(open[position - 1])}
+            aria-label="Domanda precedente"
+          >
+            ←
+          </button>
+          <button
+            className="ghost small"
+            disabled={position < 0 || position >= open.length - 1}
+            onClick={() => onSelect(open[position + 1])}
+            aria-label="Domanda successiva"
+          >
+            →
+          </button>
+        </nav>
       </header>
 
-      <div className="question-list">
-        {open.map((question) => (
-          <Card
-            key={question.id}
-            question={question}
-            selected={selected?.id === question.id}
-            busy={busy === question.id}
-            onSelect={() => onSelect(question)}
-            onAnswer={(option) => onAnswer(question, option)}
-          />
-        ))}
+      <p className="decide-meta">
+        <span className="kind">{KIND_LABEL[current.kind] ?? current.kind}</span>
+        <span className="at">a {formatTime(current.at)}</span>
+      </p>
+      <p className="context">{current.context}</p>
 
-        {answered.length > 0 && (
-          <details className="answered">
-            <summary>{answered.length} già decise</summary>
-            {answered.map((question) => (
-              <div key={question.id} className="answered-row" onClick={() => onSelect(question)}>
-                <b>{formatTime(question.at)}</b>
-                <span>{question.options.find((option) => option.id === question.answer)?.label ?? question.answer}</span>
-              </div>
-            ))}
-          </details>
-        )}
+      <div className="options">
+        {current.options.map((option) => (
+          <div
+            key={option.id}
+            className={option.recommended ? "option recommended" : "option"}
+          >
+            <div className="option-text">
+              <b>{option.label}</b>
+              {option.detail && <small>{option.detail}</small>}
+            </div>
+            <div className="option-actions">
+              {option.start !== undefined && option.end !== undefined && (
+                <button
+                  className="listen"
+                  onClick={() => onListen(current, option)}
+                  aria-label={`Ascolta: ${option.label}`}
+                >
+                  {playingOption === option.id ? "◼ ferma" : "▶ ascolta"}
+                </button>
+              )}
+              <button
+                className="choose"
+                disabled={busy === current.id}
+                onClick={() => onAnswer(current, option.id)}
+              >
+                {busy === current.id ? "…" : "Scegli"}
+              </button>
+            </div>
+            {option.recommended && <i className="badge">consigliata</i>}
+          </div>
+        ))}
       </div>
+
+      {answered.length > 0 && <Answered questions={answered} onSelect={onSelect} />}
     </aside>
   );
 }
 
-function Card({
-  question,
-  selected,
-  busy,
+function Answered({
+  questions,
   onSelect,
-  onAnswer,
 }: {
-  question: Question;
-  selected: boolean;
-  busy: boolean;
-  onSelect: () => void;
-  onAnswer: (optionId: string) => void;
+  questions: Question[];
+  onSelect: (question: Question) => void;
 }) {
   return (
-    <article className={selected ? "question selected" : "question"} onClick={onSelect}>
-      <div className="question-head">
-        <span className="kind">{KIND_LABEL[question.kind] ?? question.kind}</span>
-        <span className="at">{formatTime(question.at)}</span>
-      </div>
-      <h3>{question.prompt}</h3>
-      <p className="context">{question.context}</p>
-      <div className="options">
-        {question.options.map((option) => (
-          <button
-            key={option.id}
-            className={option.recommended ? "option recommended" : "option"}
-            disabled={busy}
-            onClick={(event) => {
-              event.stopPropagation();
-              onAnswer(option.id);
-            }}
-          >
-            <b>{option.label}</b>
-            {option.detail && <small>{option.detail}</small>}
-            {option.recommended && <i className="badge">consigliata</i>}
-          </button>
-        ))}
-      </div>
-    </article>
+    <details className="answered">
+      <summary>{questions.length} già decise</summary>
+      {questions.map((question) => (
+        <button key={question.id} className="answered-row" onClick={() => onSelect(question)}>
+          <b>{formatTime(question.at)}</b>
+          <span>
+            {question.options.find((option) => option.id === question.answer)?.label ??
+              question.answer}
+          </span>
+        </button>
+      ))}
+    </details>
   );
 }

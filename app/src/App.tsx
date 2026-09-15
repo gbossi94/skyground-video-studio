@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, type ProjectSummary } from "./api";
-import { Preview } from "./components/Preview";
+import { Preview, type PreviewHandle } from "./components/Preview";
 import { Questions } from "./components/Questions";
 import { Timeline, formatTime } from "./components/Timeline";
-import type { CutPlan, CutState, Question, Transcript } from "./types";
+import type { CutPlan, CutState, Option, Question, Transcript } from "./types";
 
 export default function App() {
   const [project, setProject] = useState<ProjectSummary | null>(null);
@@ -15,6 +15,8 @@ export default function App() {
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [playingOption, setPlayingOption] = useState<string | null>(null);
+  const player = useRef<PreviewHandle>(null);
 
   useEffect(() => {
     void (async () => {
@@ -151,37 +153,70 @@ export default function App() {
         <main className="workspace">
           <section className="stage">
             <Preview
+              ref={player}
               src={mediaUrl}
               plan={plan}
               playhead={playhead}
               playing={playing}
               onTime={setPlayhead}
-              onPlayingChange={setPlaying}
+              onPlayingChange={(value) => {
+                setPlaying(value);
+                if (!value) setPlayingOption(null);
+              }}
             />
-            {transcript && (
-              <Timeline
-                plan={plan}
-                transcript={transcript}
-                playhead={playhead}
-                onSeek={(at) => {
-                  setPlaying(false);
-                  setPlayhead(at);
+            <div className="transport">
+              <button
+                className="play"
+                disabled={!mediaUrl}
+                onClick={() => {
+                  setPlayingOption(null);
+                  player.current?.toggleEdit();
                 }}
-                selectedQuestion={selected}
-              />
-            )}
+              >
+                {playing && !playingOption ? "◼ Pausa" : "▶ Riproduci il montaggio"}
+              </button>
+              <span className="hint">Salta le parti rimosse · {formatTime(playhead)}</span>
+            </div>
           </section>
+
           <Questions
             questions={plan.questions}
             selected={selected}
             busy={busy}
+            playingOption={playingOption}
             onSelect={(question) => {
               setSelected(question);
-              setPlaying(false);
+              setPlayingOption(null);
+              player.current?.stop();
               setPlayhead(question.at);
             }}
             onAnswer={answer}
+            onListen={(question, option: Option) => {
+              if (option.start === undefined || option.end === undefined) return;
+              if (playingOption === option.id) {
+                setPlayingOption(null);
+                player.current?.stop();
+                return;
+              }
+              setSelected(question);
+              setPlayingOption(option.id);
+              player.current?.playRange(option.start, option.end);
+            }}
           />
+
+          {transcript && (
+            <Timeline
+              plan={plan}
+              transcript={transcript}
+              playhead={playhead}
+              onSeek={(at) => {
+                setPlayingOption(null);
+                player.current?.stop();
+                setPlayhead(at);
+              }}
+              selectedQuestion={selected}
+            />
+          )}
         </main>
       )}
     </div>
