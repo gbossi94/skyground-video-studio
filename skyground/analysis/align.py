@@ -52,7 +52,30 @@ def clamp_words(words: list[Word], silences: list[Silence]) -> list[Word]:
         if end - start < MIN_WORD:
             end = start + MIN_WORD
         corrected.append(Word(t=round(start, 3), end=round(end, 3), s=word.s, p=word.p))
-    return corrected
+    return _in_order(corrected)
+
+
+def _in_order(words: list[Word]) -> list[Word]:
+    """No word may run into the one after it.
+
+    Trimming can push a word's end past the start of the next: a word squeezed
+    almost to nothing by a silence is widened back to `MIN_WORD`, and that
+    minimum has to come from somewhere. Thirty-eight of them overlapped on the
+    reference take.
+
+    It matters because the rule that no cut lands inside a word is enforced by
+    padding a segment only as far as the neighbouring word — which assumes the
+    neighbour is where it claims to be. With overlaps the plan was built,
+    checked, and refused by its own invariants at the last moment.
+    """
+    ordered: list[Word] = []
+    for word in words:
+        start, end = word.t, word.end
+        if ordered and start < ordered[-1].end:
+            start = ordered[-1].end
+            end = max(end, start + MIN_WORD)
+        ordered.append(Word(t=round(start, 3), end=round(end, 3), s=word.s, p=word.p))
+    return ordered
 
 
 def prepare(analysis):

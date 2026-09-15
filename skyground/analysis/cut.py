@@ -331,6 +331,11 @@ def _build_segments(
                 # Too short to stand alone: glue it to the previous segment when
                 # they are adjacent in the source, otherwise leave it out and let
                 # the removal be recorded with a reason.
+                #
+                # The skip used to sit inside the glue branch, so a short piece
+                # with nothing to glue to was appended anyway — against both the
+                # comment above it and the invariant that later refused the whole
+                # plan over a segment of 0.300s.
                 if segments and abs(segments[-1].end - segment.start) < policy.keep_pause * 2:
                     segments[-1] = Segment(
                         segments[-1].start,
@@ -339,7 +344,7 @@ def _build_segments(
                         segments[-1].first_word,
                         segment.last_word,
                     )
-                    continue
+                continue
             segment.label = _label_for(utterances, piece_first)
             segments.append(segment)
 

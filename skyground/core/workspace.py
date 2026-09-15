@@ -83,6 +83,24 @@ def find_ffmpeg() -> str:
     raise StudioError("FFmpeg non disponibile; installalo o imposta FFMPEG_BIN")
 
 
+def measured_duration(path: pathlib.Path) -> float:
+    """How long a file really is, asked of the file itself.
+
+    A clip cut at 4.575s–9.494s does not come out 4.919s long: the encoder lands
+    on frame boundaries, and each piece gains a frame or so. Over thirty-nine
+    clips that drifted to 1.2 seconds, and since cards and captions are timed
+    against these numbers, the end of the video would have been more than a
+    second out of step with its own subtitles.
+    """
+    probe = shutil.which("ffprobe") or str(pathlib.Path(find_ffmpeg()).with_name("ffprobe"))
+    result = subprocess.run(
+        [probe, "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+    return float(result.stdout.strip())
+
+
 def caption_groups(words: list[dict], cards: list[dict], duration: float) -> list[list[dict]]:
     """Group caption words into on-screen lines, skipping motion-card windows.
 
@@ -134,20 +152,43 @@ def validate_documents(documents: dict, *, missing_files: list[str] | None = Non
     problems.extend(missing_files or [])
 
     timeline = documents.get("timeline") or {}
-    cursor = 0.0
-    for index, clip in enumerate(timeline.get("clips", [])):
+    # A clip cut at 4.575–9.494 does not encode to exactly 4.919 seconds: the
+    # encoder lands on a frame boundary and the piece gains up to a frame. So
+    # `output_start` is *measured* when the source is rebuilt, and checking it
+    # against the sum of the nominal lengths has to allow for that drift —
+    # roughly one frame per clip — or it condemns the only numbers that match
+    # the file. Anything larger is somebody having edited the timeline by hand
+    # and forgotten to renumber, which is what this check is for.
+    # Checked step by step rather than against a running total: a clip cut at
+    # 4.575–9.494 does not encode to exactly 4.919 seconds — the encoder lands
+    # on a frame boundary — so each piece can gain a frame or two, and a
+    # cumulative check either rejects the measured numbers or, once its
+    # tolerance is widened enough to accept them, stops catching anything.
+    # Each clip must simply start where the previous one ended.
+    slack = 2.0 / 30.0
+    timeline_clips = timeline.get("clips", [])
+    previous_start = None
+    previous_length = 0.0
+    total = 0.0
+    for index, clip in enumerate(timeline_clips):
         start = float(clip.get("start", -1))
         end = float(clip.get("end", -1))
         output_start = float(clip.get("output_start", -1))
         if start < 0 or end <= start:
             problems.append(f"timeline clip {index}: intervallo sorgente non valido")
-        if abs(output_start - cursor) > 0.002:
+        length = max(0.0, end - start)
+        if previous_start is None:
+            expected = 0.0
+        else:
+            expected = previous_start + previous_length
+        if abs(output_start - expected) > slack:
             problems.append(
-                f"timeline clip {index}: output_start {output_start:.3f}, atteso {cursor:.3f}"
+                f"timeline clip {index}: output_start {output_start:.3f}, atteso {expected:.3f}"
             )
-        cursor += max(0.0, end - start)
-    if abs(cursor - duration) > 0.01:
-        problems.append(f"timeline: durata {cursor:.3f}, progetto {duration:.3f}")
+        previous_start, previous_length = output_start, length
+        total = output_start + length
+    if abs(total - duration) > slack:
+        problems.append(f"timeline: durata {total:.3f}, progetto {duration:.3f}")
 
     cards = sorted(documents.get("cards") or [], key=lambda item: float(item["a"]))
     previous_end = -1.0
@@ -434,55 +475,48 @@ class Workspace:
             raise NotFound(f"raw non disponibile: {raw}; esegui pull")
         ffmpeg = find_ffmpeg()
 
-        filters = []
-        inputs = []
-        cursor = 0.0
-        for index, clip in enumerate(timeline["clips"]):
-            start = float(clip["start"])
-            end = float(clip["end"])
-            clip["output_start"] = cursor
-            cursor += end - start
-            filters.extend(
-                [
-                    f"[0:v]trim=start={start}:end={end},setpts=N/(30*TB),fps=30[v{index}]",
-                    f"[0:a]atrim=start={start}:end={end},asetpts=PTS-STARTPTS[a{index}]",
-                ]
-            )
-            inputs.append(f"[v{index}][a{index}]")
-        filters.append("".join(inputs) + f"concat=n={len(inputs)}:v=1:a=1[vout][aout]")
+        # Un pezzo alla volta, poi si concatena. Un unico `filter_complex` con
+        # un trim per clip fa decodificare a FFmpeg lo stesso file una volta per
+        # clip, in parallelo: su trentanove clip di 1080×1920 in HEVC il
+        # processo viene ucciso dal sistema. Così la memoria non dipende da
+        # quante clip ci sono.
         output = base / "composition" / "source.mp4"
-        subprocess.run(
-            [
-                ffmpeg,
-                "-y",
-                "-v",
-                "warning",
-                "-i",
-                str(raw),
-                "-filter_complex",
-                ";".join(filters),
-                "-map",
-                "[vout]",
-                "-map",
-                "[aout]",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "medium",
-                "-crf",
-                "18",
-                "-pix_fmt",
-                "yuv420p",
-                "-c:a",
-                "aac",
-                "-b:a",
-                "256k",
-                "-movflags",
-                "+faststart",
-                str(output),
-            ],
-            check=True,
-        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        encode = [
+            "-vf", "fps=30",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-pix_fmt", "yuv420p", "-video_track_timescale", "30000",
+            "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-ac", "2",
+        ]
+        cursor = 0.0
+        with tempfile.TemporaryDirectory(prefix="skyground-source-") as work:
+            pieces = []
+            for index, clip in enumerate(timeline["clips"]):
+                start = float(clip["start"])
+                end = float(clip["end"])
+                piece = pathlib.Path(work) / f"{index:04d}.mp4"
+                subprocess.run(
+                    [ffmpeg, "-y", "-v", "error",
+                     "-ss", f"{start:.6f}", "-to", f"{end:.6f}", "-i", str(raw),
+                     *encode, str(piece)],
+                    check=True,
+                )
+                # Where the clip lands is measured, not assumed: everything
+                # timed against the edit — cards, captions — reads these.
+                clip["output_start"] = round(cursor, 6)
+                cursor += measured_duration(piece)
+                pieces.append(piece)
+
+            listing = pathlib.Path(work) / "pezzi.txt"
+            listing.write_text(
+                "".join(f"file '{piece}'\n" for piece in pieces), encoding="utf-8"
+            )
+            subprocess.run(
+                [ffmpeg, "-y", "-v", "error", "-f", "concat", "-safe", "0",
+                 "-i", str(listing), "-c", "copy", "-movflags", "+faststart",
+                 str(output)],
+                check=True,
+            )
         timeline["duration"] = cursor
         project["canvas"]["duration"] = cursor
         write_json(timeline_path, timeline)

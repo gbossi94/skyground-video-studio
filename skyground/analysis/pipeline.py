@@ -133,8 +133,14 @@ def _remember_answered(
 
 def apply_to_timeline(plan: CutPlan, analysis: Analysis, timeline: dict) -> dict:
     """Turn an answered plan into `timeline.json`. Refuses anything else."""
+    from skyground.analysis import align
+
+    # Against the same corrected timings the plan was built from. Checked
+    # against the raw ones it reported cuts landing inside words that, as the
+    # engine sees them, end earlier — a true statement about data nobody uses,
+    # and it blocked a perfectly good plan at the last step.
     ok, problems = invariants.applicable(
-        plan, analysis, min_segment=float(plan.policy.get("min_segment", 0.35))
+        plan, align.prepare(analysis), min_segment=float(plan.policy.get("min_segment", 0.35))
     )
     if not ok:
         raise ValidationError(
