@@ -91,8 +91,11 @@ def plan_cut(
     #
     # Corrected once, into the analysis itself, so that nothing downstream can
     # reach past it to the original timings — which is exactly the mistake that
-    # made the first attempt at this fix do nothing at all.
-    analysis = replace(analysis, words=align.clamp_words(analysis.words, analysis.silences))
+    # made the first attempt at this fix do nothing at all. Idempotent, so a
+    # caller that already prepared the analysis (the adviser needs it to, in
+    # order to number the same utterances this function will build) loses
+    # nothing by it.
+    analysis = align.prepare(analysis)
     words = analysis.words
 
     plan = CutPlan(

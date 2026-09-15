@@ -163,3 +163,78 @@ def test_what_is_missing_and_what_is_extra_are_told_apart():
     score = evaluation.compare([(0.0, 4.0)], [(2.0, 8.0)])
     assert score.extra == [(0.0, 2.0)]
     assert score.missing == [(4.0, 8.0)]
+
+
+# ------------------------------------- the adviser and the engine must agree
+
+
+class RecordingAdviser:
+    """Remembers what it was shown, and points at the first two utterances."""
+
+    name = "prova"
+
+    def __init__(self):
+        self.seen: list = []
+
+    def suspects(self, utterances):
+        self.seen = list(utterances)
+        if len(utterances) < 2:
+            return []
+        return [{"a": 0, "b": 1, "why": "prova"}]
+
+
+def _stumbling_take() -> Analysis:
+    """Words whose reported ends run into the pauses, as Whisper reports them."""
+    script = [
+        ("Oppure", 1.0, 1.4), ("cerchi", 1.4, 1.8), ("di", 1.8, 2.0), ("cambiare", 2.0, 6.5),
+        ("Oppure", 7.0, 7.4), ("cerchi", 7.4, 7.8), ("di", 7.8, 8.0), ("cambiare", 8.0, 8.5),
+        ("davvero", 8.5, 9.0),
+    ]
+    return Analysis(
+        source="raw.mov",
+        duration=10.0,
+        words=[Word(t=a, end=b, s=text, p=0.95) for text, a, b in script],
+        silences=[Silence(2.6, 7.0)],
+    )
+
+
+def test_the_adviser_is_shown_the_utterances_the_engine_will_use():
+    """It answers with indices into the list it was given. When the two lists
+    were built from different timings — 31 utterances against 50 — every index
+    pointed at the wrong line, and the questions read plausibly while being
+    about the wrong pair of takes."""
+    from skyground.analysis import pipeline
+
+    analysis = _stumbling_take()
+    adviser = RecordingAdviser()
+
+    plan = pipeline.propose(analysis, adviser=adviser)
+
+    assert adviser.seen, "il consulente non è stato interpellato"
+    assert len(adviser.seen) == len(plan.utterances)
+    assert [u.text for u in adviser.seen] == [u.text for u in plan.utterances]
+
+
+def test_a_suspect_names_the_utterances_the_adviser_meant():
+    from skyground.analysis import pipeline
+
+    analysis = _stumbling_take()
+    adviser = RecordingAdviser()
+
+    plan = pipeline.propose(analysis, adviser=adviser)
+
+    asked = [q for q in plan.questions if q.id.startswith("take:")]
+    assert asked, "il sospetto non è diventato una domanda"
+    quoted = " ".join(option.label for option in asked[0].options)
+    for shown in (adviser.seen[0].text, adviser.seen[1].text):
+        assert shown[:20] in quoted, f"la domanda non parla di «{shown[:30]}»"
+
+
+def test_preparing_twice_changes_nothing():
+    """The engine prepares defensively; a caller that already did must not be
+    punished for it."""
+    from skyground.analysis import align
+
+    once = align.prepare(_stumbling_take())
+    twice = align.prepare(once)
+    assert once.words == twice.words

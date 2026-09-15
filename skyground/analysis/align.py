@@ -55,6 +55,23 @@ def clamp_words(words: list[Word], silences: list[Silence]) -> list[Word]:
     return corrected
 
 
+def prepare(analysis):
+    """The analysis everything downstream must reason about.
+
+    There has to be exactly one corrected version, produced in one place. When
+    there were two — the adviser reading the raw timings and the engine reading
+    the corrected ones — they disagreed about how many utterances the take
+    contains, and every index the adviser returned pointed at the wrong line.
+    The questions that came out read plausibly and were nonsense.
+
+    Idempotent: a word already trimmed to the speech around it has nothing left
+    to trim, so calling this twice is safe and calling it once is enough.
+    """
+    from dataclasses import replace
+
+    return replace(analysis, words=clamp_words(analysis.words, analysis.silences))
+
+
 def speech_ratio(words: list[Word], duration: float) -> float:
     """How much of the source the words claim to cover. A sanity check: real
     speech to camera lands around 60%, and a number near 95% means the timings

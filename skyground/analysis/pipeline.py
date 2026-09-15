@@ -65,8 +65,14 @@ def propose(
     """Build a plan. Deterministic given the same analysis and the same answers."""
     adviser = adviser or NullAdviser()
     policy = policy or CutPolicy()
+    from skyground.analysis import align
     from skyground.analysis.takes import build_utterances
 
+    # The adviser answers with indices into the list of utterances it was shown,
+    # so it has to be shown the same list the engine works from. Correcting the
+    # timings here — once, before either of them looks — is what makes those
+    # indices mean the same thing on both sides.
+    analysis = align.prepare(analysis)
     utterances = build_utterances(analysis.words, gap=policy.utterance_gap)
     suspects = adviser.suspects(utterances) if utterances else []
     return plan_cut(analysis, policy, decisions or {}, suspects=suspects)
