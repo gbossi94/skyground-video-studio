@@ -47,7 +47,17 @@ container non deve più far girare un modello.
 I media non stanno in Git. Dopo il primo deploy il progetto c'è ma il suo girato
 no, e l'editor lo dice: *«il girato non è ancora stato ascoltato»*.
 
-Dal tuo Mac, con il checkout e gli asset già scaricati (`studio.py pull`).
+Dal tuo Mac, con il checkout e gli asset già scaricati (`studio.py pull`), in
+un comando solo:
+
+```bash
+./deploy/carica-girato.sh https://<host>
+```
+
+Chiede email e password, fa i tre passi qui sotto e verifica che i byte
+arrivati siano quelli partiti. Il resto di questa sezione è cosa fa, per
+quando serve farlo a mano.
+
 Prima il cookie di sessione, che serve a tutte le chiamate tranne una:
 
 ```bash

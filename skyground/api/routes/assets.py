@@ -7,6 +7,7 @@ from fastapi import APIRouter, Body, Depends, Request
 from skyground.api import serializers
 from skyground.api.deps import ProjectContext, get_settings, get_storage, project_context
 from skyground.api.uploads import receive_object
+from skyground.api.urls import absolute
 from skyground.config import Settings
 from skyground.errors import ValidationError
 from skyground.services import assets as asset_service
@@ -17,18 +18,22 @@ router = APIRouter()
 
 @router.get("/api/projects/{slug}/assets")
 def list_assets(
+    request: Request,
     context: ProjectContext = Depends(project_context),
     storage: ObjectStorage = Depends(get_storage),
 ) -> list[dict]:
     context.require("asset:read")
     return [
-        serializers.asset_payload(asset, asset_service.download_url(storage, asset.key))
+        serializers.asset_payload(
+            asset, absolute(request, asset_service.download_url(storage, asset.key))
+        )
         for asset in asset_service.list_for_project(context.session, context.project)
     ]
 
 
 @router.post("/api/projects/{slug}/assets/upload-url")
 def create_upload_url(
+    request: Request,
     payload: dict = Body(...),
     context: ProjectContext = Depends(project_context),
     storage: ObjectStorage = Depends(get_storage),
@@ -43,7 +48,10 @@ def create_upload_url(
     key = asset_service.object_key(context.project, relative)
     return {
         "key": key,
-        "url": asset_service.upload_url(storage, key, expires_in=settings.signed_url_ttl_seconds),
+        "url": absolute(
+            request,
+            asset_service.upload_url(storage, key, expires_in=settings.signed_url_ttl_seconds),
+        ),
         "expiresIn": settings.signed_url_ttl_seconds,
         "method": "PUT",
     }
@@ -51,6 +59,7 @@ def create_upload_url(
 
 @router.post("/api/projects/{slug}/assets")
 def register_asset(
+    request: Request,
     payload: dict = Body(...),
     context: ProjectContext = Depends(project_context),
     storage: ObjectStorage = Depends(get_storage),
@@ -70,7 +79,9 @@ def register_asset(
         meta=payload.get("meta") or {},
         actor=context.user,
     )
-    return serializers.asset_payload(asset, asset_service.download_url(storage, key))
+    return serializers.asset_payload(
+        asset, absolute(request, asset_service.download_url(storage, key))
+    )
 
 
 @router.put("/api/projects/{slug}/assets/{relative:path}")
@@ -101,7 +112,9 @@ async def upload_asset(
         content_type=stored.content_type,
         actor=context.user,
     )
-    return serializers.asset_payload(asset, asset_service.download_url(storage, key))
+    return serializers.asset_payload(
+        asset, absolute(request, asset_service.download_url(storage, key))
+    )
 
 
 @router.delete("/api/projects/{slug}/assets/{relative:path}")

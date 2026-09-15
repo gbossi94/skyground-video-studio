@@ -199,3 +199,21 @@ def test_the_spool_file_does_not_survive_the_upload(client, registered_project, 
     client.put(f"/api/projects/{PROJECT_ID}/assets/raw/raw.mov", content=b"girato")
     spool = pathlib.Path(settings.storage_root) / ".uploads"
     assert list(spool.glob("*")) == []
+
+
+def test_the_urls_handed_out_are_usable_as_they_are(client, registered_project, sign_in):
+    """The local backend signs a path, because it does not know what name the
+    studio answers to; R2 signs a whole address. A client holding the response
+    cannot tell, so the API resolves it before answering."""
+    sign_in("editor@skyground.online")
+    handed = client.post(
+        f"/api/projects/{PROJECT_ID}/assets/upload-url", json={"path": "raw/raw.mov"}
+    ).json()["url"]
+    assert handed.startswith("http://") or handed.startswith("https://")
+
+    stored = client.put(handed, content=b"girato", headers={"Content-Type": "video/quicktime"})
+    assert stored.status_code == 200
+    client.post(f"/api/projects/{PROJECT_ID}/assets", json={"key": stored.json()["key"]})
+    download = client.get(f"/api/projects/{PROJECT_ID}/assets").json()[0]["url"]
+    assert download.startswith("http://") or download.startswith("https://")
+    assert client.get(download).content == b"girato"
