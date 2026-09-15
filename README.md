@@ -51,7 +51,8 @@ Raw, proxy, render e tracce audio pesanti sono esclusi tramite `.gitignore`. Cre
 
 - [`docs/ARCHITETTURA.md`](docs/ARCHITETTURA.md) — confine della fase 1, moduli, modello dati, permessi, compromessi.
 - [`docs/MIGRAZIONE.md`](docs/MIGRAZIONE.md) — cosa cambia per chi lavora al video e come si passa al cloud.
-- [`docs/DEPLOY.md`](docs/DEPLOY.md) — elenco esatto dei dati necessari a un deploy su Render.
+- [`docs/ONLINE.md`](docs/ONLINE.md) — come metterlo online: un servizio, un disco, nessuna chiave da procurarsi.
+- [`docs/DEPLOY.md`](docs/DEPLOY.md) — la forma con web e worker separati e i media su Cloudflare R2.
 - [`COLLABORATION.md`](COLLABORATION.md) — come lavorare in due sullo stesso video.
 
 ## Primo progetto
