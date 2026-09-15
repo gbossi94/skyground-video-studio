@@ -23,9 +23,15 @@ export default function App() {
         if (!projects.length) return setError("Nessun progetto disponibile");
         setProject(projects[0]);
       } catch (cause) {
-        setError(cause instanceof ApiError && cause.status === 401
-          ? "Devi accedere allo studio per vedere il montaggio."
-          : String(cause));
+        // Without a session there is nothing to show here, and the sign-in form
+        // — which on a fresh studio is the form that creates the first account
+        // — lives on the panel at the root. Send the visitor there instead of
+        // leaving them on a dead end.
+        if (cause instanceof ApiError && cause.status === 401) {
+          window.location.replace("/");
+          return;
+        }
+        setError(String(cause));
       }
     })();
   }, []);

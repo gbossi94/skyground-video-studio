@@ -12,16 +12,15 @@ const $ = (id) => document.getElementById(id);
 
 async function request(url, options) {
   const response = await fetch(url, options);
-  // A 401 anywhere but on the login call itself means the session is gone.
-  if (response.status === 401 && !url.startsWith("/api/auth/")) {
-    showSignIn();
-    throw new Error("Autenticazione richiesta");
-  }
   const value = response.status === 204 ? {} : await response.json();
   if (!response.ok) {
     const error = new Error(value.error || "Richiesta non riuscita");
     error.status = response.status;
     error.body = value;
+    // No session: either it expired, or this studio has never been claimed.
+    // Both cases end at the same form, so open it rather than report an error
+    // nobody can act on. Decided on the status, never on the message text.
+    if (response.status === 401) showSignIn();
     throw error;
   }
   return {value, headers: response.headers};
@@ -152,6 +151,7 @@ $("signin-form").onsubmit = async (event) => {
     if (!projects.length) throw new Error("Nessun progetto disponibile");
     await openProject(projects[0].id);
   } catch (error) {
-    if (error.message !== "Autenticazione richiesta") $("title").textContent = error.message;
+    // A 401 has already opened the form: there is nothing to add on top of it.
+    if (error.status !== 401) $("title").textContent = error.message;
   }
 })();
