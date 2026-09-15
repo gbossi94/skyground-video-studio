@@ -20,7 +20,9 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    # Vedi Dockerfile.combined: l'import va verificato mentre si costruisce.
+    && python -c "from faster_whisper import WhisperModel"
 
 COPY alembic.ini studio.py ./
 COPY skyground ./skyground

@@ -6,6 +6,11 @@ alembic==1.14.0
 # the model weights — which is why the service runs on a plan with the memory
 # for it. `SKYGROUND_TRANSCRIPTION_PROVIDER=deepgram` replaces it with an API.
 faster-whisper==1.1.1
+# faster-whisper importa `requests` senza dichiararlo, e huggingface-hub 1.x non
+# lo porta più con sé. In un ambiente di sviluppo arriva comunque, per qualche
+# altra strada; in un'immagine pulita no, e il worker muore all'import. Va
+# dichiarato qui, dove l'immagine lo legge.
+requests==2.32.3
 boto3==1.35.90
 fastapi==0.115.12
 psycopg[binary]==3.2.3

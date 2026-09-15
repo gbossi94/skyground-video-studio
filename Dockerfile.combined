@@ -31,7 +31,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt \
+    # Che la trascrizione sia importabile si scopre qui, dove la build fallisce,
+    # e non più tardi dentro un job in coda. faster-whisper importa `requests`
+    # senza dichiararlo: in un ambiente di sviluppo arriva per altre strade, in
+    # un'immagine pulita no, e il difetto si è visto solo in produzione.
+    && python -c "from faster_whisper import WhisperModel"
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
