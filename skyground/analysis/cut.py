@@ -119,12 +119,21 @@ def plan_cut(
         question_id = _take_question_id(group.utterances)
         answer = decisions.get(question_id)
 
-        if answer == "keep-both":
-            # Not a retake after all: every attempt stays in the edit.
-            group.chosen = None
-            continue
-
         if answer is not None:
+            # A decision already taken stays in the plan, marked as taken. It
+            # used to be consumed and forgotten: the rebuilt plan carried its
+            # effect with no trace of the choice, so nobody could see what had
+            # been decided, or change their mind.
+            decided = _take_question(
+                question_id, group.utterances, utterances, scores, best, margin
+            )
+            decided.answer = answer
+            plan.questions.append(decided)
+
+            if answer == "keep-both":
+                # Not a retake after all: every attempt stays in the edit.
+                group.chosen = None
+                continue
             chosen = _utterance_from_answer(answer, group.utterances)
             group.chosen = chosen
             for index in group.utterances:
@@ -151,17 +160,17 @@ def plan_cut(
         if question_id in {question.id for question in plan.questions}:
             continue
         answer = decisions.get(question_id)
-        if answer == "keep-both":
-            continue
-        if answer is not None:
-            chosen = _utterance_from_answer(answer, [first, second])
-            for index in (first, second):
-                if index != chosen:
-                    dropped[index] = "scelta dell'editor"
-            continue
-        plan.questions.append(
-            _suspect_question(question_id, first, second, utterances, suspect.get("why", ""))
+        question = _suspect_question(
+            question_id, first, second, utterances, suspect.get("why", "")
         )
+        question.answer = answer
+        plan.questions.append(question)
+        if answer is None or answer == "keep-both":
+            continue
+        chosen = _utterance_from_answer(answer, [first, second])
+        for index in (first, second):
+            if index != chosen:
+                dropped[index] = "scelta dell'editor"
 
     for index, reason in dropped.items():
         utterances[index].kept = False
@@ -228,10 +237,13 @@ def _build_segments(
                 continue
             if gap >= policy.rhetorical_pause and not _ends_sentence(words[index].s):
                 question = _pause_question(words[index].end, words[index + 1].t, gap, words, index)
-                if decisions.get(question.id) == "keep":
+                # Recorded either way: open when nobody has ruled on it, marked
+                # with the answer when somebody has. A decision that disappears
+                # from the plan cannot be reviewed or taken back.
+                question.answer = decisions.get(question.id)
+                plan.questions.append(question)
+                if question.answer == "keep":
                     continue  # the editor called it deliberate: leave it whole
-                if question.id not in decisions:
-                    plan.questions.append(question)
             pieces.append((piece_start, index))
             piece_start = index + 1
         pieces.append((piece_start, last))

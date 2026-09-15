@@ -350,3 +350,46 @@ def test_silence_only_footage_produces_no_segments():
     assert plan.segments == []
     assert plan.removed[0].duration == pytest.approx(30.0)
     assert invariants.check(plan, analysis) == []
+
+
+# ---------------------------------------------- decisions have to stay visible
+
+
+def test_a_decision_stays_in_the_plan_after_a_rebuild(restarted_sentence):
+    """Answering used to consume the question: the rebuilt plan carried the
+    effect of the choice with no trace of the choice itself, so nobody could see
+    what had been decided — or change their mind. Found in production, on a plan
+    that had quietly gone from six open questions to four."""
+    first = plan_cut(restarted_sentence)
+    question = next(q for q in first.questions if q.kind == ASK_TAKE_CHOICE)
+    chosen = question.options[0].id
+
+    rebuilt = plan_cut(restarted_sentence, None, {question.id: chosen})
+
+    kept = next((q for q in rebuilt.questions if q.id == question.id), None)
+    assert kept is not None, "la domanda decisa è sparita dal piano"
+    assert kept.answer == chosen
+    assert kept.resolved is True
+    # And it no longer blocks: a decision taken is not an ambiguity.
+    assert [q for q in rebuilt.questions if not q.resolved] != first.questions
+
+
+def test_rebuilding_does_not_quietly_lose_answers(restarted_sentence):
+    """The exact sequence that lost them: answer, then regenerate."""
+    plan = plan_cut(restarted_sentence)
+    question = next(q for q in plan.questions if q.kind == ASK_TAKE_CHOICE)
+    answered = pipeline.answer(restarted_sentence, plan, question.id, question.options[0].id)
+    assert sum(1 for q in answered.questions if q.resolved) == 1
+
+    again = plan_cut(restarted_sentence, None, pipeline.decisions_from(answered))
+    assert sum(1 for q in again.questions if q.resolved) == 1
+    assert len(again.questions) == len(answered.questions)
+
+
+def test_keeping_both_takes_is_also_a_decision_on_the_record(restarted_sentence):
+    plan = plan_cut(restarted_sentence)
+    question = next(q for q in plan.questions if q.kind == ASK_TAKE_CHOICE)
+    rebuilt = plan_cut(restarted_sentence, None, {question.id: "keep-both"})
+    kept = next(q for q in rebuilt.questions if q.id == question.id)
+    assert kept.answer == "keep-both"
+    assert invariants.check(rebuilt, restarted_sentence) == []
