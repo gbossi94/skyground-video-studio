@@ -271,3 +271,60 @@ def test_local_mode_has_nothing_to_claim(local_client):
     assert local_client.post(
         "/api/auth/setup", json={"email": "x@y.it", "password": PASSWORD}
     ).status_code == 422
+
+
+# ------------------------------------------------- the account the host seeds
+
+
+def test_the_environment_can_seed_an_administrator(session):
+    user, created = accounts.ensure_admin(session, "servizio@skyground.online", PASSWORD)
+    assert created is True
+    assert user.is_admin is True
+    assert accounts.authenticate(session, "servizio@skyground.online", PASSWORD) is not None
+
+
+def test_seeding_never_takes_over_an_account_that_exists(session, make_user):
+    """Otherwise setting the variable on a running studio would silently hand
+    somebody else's account to whoever can edit the environment."""
+    mine = make_user("gabriele@skyground.online")
+    mine = session.merge(mine)
+    original = mine.password_hash
+
+    user, created = accounts.ensure_admin(
+        session, "gabriele@skyground.online", "una-password-completamente-diversa"
+    )
+    assert created is False
+    assert user.password_hash == original
+    assert user.is_admin is False  # not promoted either
+    with pytest.raises(Unauthorized):
+        accounts.authenticate(
+            session, "gabriele@skyground.online", "una-password-completamente-diversa"
+        )
+    assert accounts.authenticate(session, "gabriele@skyground.online", PASSWORD) is not None
+
+
+def test_a_seeded_account_is_refused_a_weak_password(session):
+    with pytest.raises(ValidationError):
+        accounts.ensure_admin(session, "servizio@skyground.online", "corta")
+    assert accounts.get_user(session, "servizio@skyground.online") is None
+
+
+def test_seeding_does_not_close_the_door_on_claiming(client, session):
+    """A studio seeded with a service account still has a real person to meet:
+    `is_empty` is about the instance, and the setup page must say so honestly."""
+    accounts.ensure_admin(session, "servizio@skyground.online", PASSWORD)
+    session.commit()
+    # The instance now has an account, so claiming is closed — the page says it
+    # rather than offering a form that would fail.
+    assert client.get("/api/auth/setup").json()["required"] is False
+
+
+def test_the_seeded_administrator_sees_every_project(client, registered_project, session):
+    accounts.ensure_admin(session, "servizio@skyground.online", PASSWORD)
+    session.commit()
+    signed = client.post(
+        "/api/auth/login",
+        json={"email": "servizio@skyground.online", "password": PASSWORD},
+    )
+    assert signed.status_code == 200
+    assert [item["id"] for item in client.get("/api/projects").json()] == [PROJECT_ID]

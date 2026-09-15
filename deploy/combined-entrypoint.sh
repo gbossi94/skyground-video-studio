@@ -7,6 +7,11 @@ set -euo pipefail
 echo "skyground: applico le migrazioni"
 python studio.py db upgrade
 
+# Crea l'amministratore descritto dall'ambiente, se non esiste già. Senza
+# SKYGROUND_ADMIN_EMAIL e SKYGROUND_ADMIN_PASSWORD non fa niente, e non tocca
+# mai un account che esiste: l'istanza resta rivendicabile dalla pagina.
+python studio.py users ensure
+
 # The disk is mounted empty on first boot; the media directory has to exist
 # before either half writes to it.
 mkdir -p "${SKYGROUND_STORAGE_ROOT:-/var/skyground/storage}"

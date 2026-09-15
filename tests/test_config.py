@@ -131,3 +131,21 @@ def test_a_declared_persistent_disk_is_accepted():
 
 def test_durability_is_off_unless_asked_for():
     assert load_settings({}).storage_is_durable is False
+
+
+def test_the_seeded_administrator_is_read_from_the_environment():
+    settings = load_settings(
+        {
+            "SKYGROUND_ADMIN_EMAIL": "servizio@skyground.online",
+            "SKYGROUND_ADMIN_PASSWORD": "una-password-lunga-abbastanza",
+        }
+    )
+    assert settings.admin_email == "servizio@skyground.online"
+    assert settings.admin_password == "una-password-lunga-abbastanza"
+
+
+def test_without_the_variables_nothing_is_seeded():
+    """The boot step has to be harmless on a deployment that never asked for it."""
+    settings = load_settings({})
+    assert settings.admin_email == ""
+    assert settings.admin_password == ""

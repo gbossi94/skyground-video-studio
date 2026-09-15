@@ -173,6 +173,29 @@ def create_first_admin(
     return user
 
 
+def ensure_admin(
+    session: Session, email: str, password: str, *, name: str = ""
+) -> tuple[User, bool]:
+    """Make sure an administrator with this address exists.
+
+    This is how a deployment gets an account nobody has to create by hand: for
+    an operator recovering access, or for an agent that has to reach the studio
+    through its own API instead of around it.
+
+    It only ever *creates*. An address that already has an account is returned
+    untouched, password included, so setting these variables on a running studio
+    can never take somebody's own account away from them.
+
+    Returns the account and whether this call is what created it.
+    """
+    existing = get_user(session, email)
+    if existing is not None:
+        return existing, False
+    user = create_user(session, email, password, name=name, is_admin=True)
+    audit.record(session, "account.bootstrap", actor=user, target=user.email)
+    return user, True
+
+
 def ensure_local_user(session: Session) -> User:
     """The identity used by single-user local mode.
 

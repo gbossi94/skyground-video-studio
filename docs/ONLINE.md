@@ -42,6 +42,27 @@ Per scendere di piano sul servizio bisogna spostare la trascrizione su un'API
 (`SKYGROUND_TRANSCRIPTION_PROVIDER=deepgram` più la chiave): a quel punto il
 container non deve più far girare un modello.
 
+## Un amministratore senza passare dalla pagina
+
+Normalmente il primo che apre l'URL crea l'account e chiude la porta. Quando
+serve invece un account che esiste *prima* — per un operatore che deve rientrare,
+o per un agente che lavora al deployment e deve usare le API dello studio invece
+di aggirarle — bastano due variabili:
+
+```
+SKYGROUND_ADMIN_EMAIL=servizio@skyground.online
+SKYGROUND_ADMIN_PASSWORD=<una password lunga>
+```
+
+All'avvio il container crea quell'amministratore se non esiste. Se esiste già
+non lo tocca: né la password, né i permessi. Impostare queste variabili su uno
+studio in funzione non può quindi portare via a nessuno il proprio account, e
+toglierle non cancella niente — per revocare l'accesso si disattiva l'account:
+
+```bash
+python3 studio.py users deactivate servizio@skyground.online
+```
+
 ## Portare dentro il girato
 
 I media non stanno in Git. Dopo il primo deploy il progetto c'è ma il suo girato

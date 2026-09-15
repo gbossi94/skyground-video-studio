@@ -115,6 +115,12 @@ class Settings:
     #: False when `secret_key` is the derived development key rather than a
     #: value somebody set. Production requires an explicit one.
     secret_key_is_explicit: bool = False
+    #: An administrator created at boot when both are set, and only if that
+    #: address has no account yet. The way a deployment is reachable by its
+    #: operator — or by an agent working on it — without anybody claiming the
+    #: instance by hand first.
+    admin_email: str = ""
+    admin_password: str = ""
 
     @property
     def is_production(self) -> bool:
@@ -218,6 +224,8 @@ def load_settings(environ: dict | None = None) -> Settings:
         worker_poll_seconds=float(_env("SKYGROUND_WORKER_POLL_SECONDS", "2") or 2),
         worker_job_timeout_seconds=_int("SKYGROUND_WORKER_JOB_TIMEOUT_SECONDS", 3600),
         secret_key_is_explicit=secret_is_explicit,
+        admin_email=_env("SKYGROUND_ADMIN_EMAIL", "") or "",
+        admin_password=_env("SKYGROUND_ADMIN_PASSWORD", "") or "",
     )
 
 

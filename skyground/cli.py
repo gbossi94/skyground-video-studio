@@ -54,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     database.add_argument("--revision", default="head")
 
     users = subcommands.add_parser("users", help="gestione degli account")
-    users.add_argument("action", choices=["create", "list", "password", "deactivate"])
+    users.add_argument("action", choices=["create", "ensure", "list", "password", "deactivate"])
     users.add_argument("email", nargs="?")
     users.add_argument("--name", default="")
     users.add_argument("--admin", action="store_true")
@@ -194,6 +194,22 @@ def run_users(args) -> int:
     from skyground.services import accounts
 
     with session_scope() as session:
+        if args.action == "ensure":
+            # Run at boot. Silent and successful when nothing is configured, so
+            # it can sit in an entrypoint without a deployment having to opt in.
+            from skyground.config import get_settings
+
+            settings = get_settings()
+            if not settings.admin_email or not settings.admin_password:
+                return 0
+            user, created = accounts.ensure_admin(
+                session, settings.admin_email, settings.admin_password
+            )
+            # Never the password, and never a hint of it: this goes to the logs.
+            print(
+                f"amministratore {'creato' if created else 'già presente'}: {user.email}"
+            )
+            return 0
         if args.action == "list":
             for user in session.scalars(select(User).order_by(User.email)):
                 flags = " ".join(
