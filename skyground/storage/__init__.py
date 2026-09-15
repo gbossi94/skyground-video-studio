@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import BinaryIO, Protocol, runtime_checkable
 
 from skyground.errors import ValidationError
@@ -47,6 +48,8 @@ class ObjectStorage(Protocol):
     backend: str
 
     def put(self, key: str, data: bytes | BinaryIO, content_type: str = ...) -> StoredObject: ...
+
+    def put_file(self, key: str, source: Path, content_type: str = ...) -> StoredObject: ...
 
     def get(self, key: str) -> bytes: ...
 

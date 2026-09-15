@@ -47,14 +47,49 @@ container non deve più far girare un modello.
 I media non stanno in Git. Dopo il primo deploy il progetto c'è ma il suo girato
 no, e l'editor lo dice: *«il girato non è ancora stato ascoltato»*.
 
-Dal tuo Mac, con il checkout e gli asset già scaricati (`studio.py pull`):
+Dal tuo Mac, con il checkout e gli asset già scaricati (`studio.py pull`).
+Prima il cookie di sessione, che serve a tutte le chiamate tranne una:
 
 ```bash
-# chiede un URL firmato e carica direttamente, senza passare dall'API
-curl -X POST https://<host>/api/projects/beauty-centers-growth-01/assets/upload-url \
-  -H 'Content-Type: application/json' -b cookie.txt \
-  -d '{"path": "assets/raw.mov"}'
+HOST=https://<host>
+PROGETTO=beauty-centers-growth-01
+
+curl -sS -c cookie.txt -X POST "$HOST/api/auth/login" \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "tu@skyground.online", "password": "..."}'
 ```
+
+Poi tre passi. Il secondo non porta credenziali: la firma nell'URL è il
+permesso, e vale pochi minuti per quella chiave e per il solo metodo `PUT`.
+
+```bash
+# 1. l'URL firmato
+URL=$(curl -sS -b cookie.txt -X POST "$HOST/api/projects/$PROGETTO/assets/upload-url" \
+  -H 'Content-Type: application/json' \
+  -d '{"path": "assets/raw.mov"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["url"])')
+
+# 2. i byte, che non passano dall'API
+curl -sS -X PUT "$URL" \
+  -H 'Content-Type: video/quicktime' \
+  --upload-file projects/$PROGETTO/assets/raw.mov
+
+# 3. registrare l'oggetto appena caricato
+curl -sS -b cookie.txt -X POST "$HOST/api/projects/$PROGETTO/assets" \
+  -H 'Content-Type: application/json' \
+  -d "{\"key\": \"projects/$PROGETTO/assets/raw.mov\", \"kind\": \"raw\"}"
+```
+
+Per un file piccolo esiste anche la via breve, che fa tutto in una chiamata
+sola passando però dall'API:
+
+```bash
+curl -sS -b cookie.txt -X PUT "$HOST/api/projects/$PROGETTO/assets/assets/raw.mov" \
+  -H 'Content-Type: video/quicktime' -H 'X-Skyground-Kind: raw' \
+  --upload-file projects/$PROGETTO/assets/raw.mov
+```
+
+Nessuna delle due tiene il file in memoria: il corpo della richiesta viene
+scritto su disco mentre arriva. Il limite è 5 GB.
 
 Poi, dall'editor, **Analizza il girato**: il worker trascrive, il motore propone
 il taglio e le ambiguità diventano domande.

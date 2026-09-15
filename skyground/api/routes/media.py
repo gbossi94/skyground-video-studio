@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse, StreamingResponse
 
 from skyground.api.deps import ProjectContext, get_storage, project_context
+from skyground.api.uploads import receive_object
 from skyground.errors import NotFound, ValidationError
 from skyground.storage import ObjectStorage, validate_key
 from skyground.storage.local import LocalObjectStorage
@@ -92,6 +93,32 @@ def read_blob(
     if not path.is_file():
         raise NotFound(f"oggetto non trovato: {key}")
     return stream_file(path, request)
+
+
+@router.put("/media/blob/{key:path}")
+async def write_blob(
+    key: str,
+    request: Request,
+    expires: str = "",
+    signature: str = "",
+    storage: ObjectStorage = Depends(get_storage),
+) -> dict:
+    """Accept an object against the signed URL handed out by `upload-url`.
+
+    The counterpart of `read_blob`, and the reason raw footage never travels
+    through the authenticated API: the signature covers the *method* too, so a
+    download link cannot be turned into a way to overwrite the file it points
+    at. With R2 this route is unused, because the signed URL names the bucket.
+    """
+    if not isinstance(storage, LocalObjectStorage):
+        raise NotFound("percorso non disponibile con questo storage")
+    validate_key(key)
+    if not storage.verify(key, expires, signature, "PUT"):
+        raise NotFound("link scaduto o non valido")
+    stored = await receive_object(
+        request, storage, key, content_type=request.headers.get("Content-Type", "")
+    )
+    return {"key": stored.key, "size": stored.size, "sha256": stored.sha256}
 
 
 @router.get("/media/{slug}/{relative:path}")

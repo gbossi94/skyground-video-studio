@@ -6,14 +6,13 @@ from fastapi import APIRouter, Body, Depends, Request
 
 from skyground.api import serializers
 from skyground.api.deps import ProjectContext, get_settings, get_storage, project_context
+from skyground.api.uploads import receive_object
 from skyground.config import Settings
 from skyground.errors import ValidationError
 from skyground.services import assets as asset_service
 from skyground.storage import ObjectStorage, validate_key
 
 router = APIRouter()
-
-MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024
 
 
 @router.get("/api/projects/{slug}/assets")
@@ -81,19 +80,17 @@ async def upload_asset(
     context: ProjectContext = Depends(project_context),
     storage: ObjectStorage = Depends(get_storage),
 ) -> dict:
-    """Direct upload, used by the local backend and by small files.
+    """Direct upload: one call that stores the bytes and records the asset.
 
-    Large media should use `upload-url` instead: this path buffers the body.
+    The body is streamed to disk rather than read into memory, so this is a
+    legitimate way in for a camera file and not only for small ones. It still
+    passes through the web service, which `upload-url` avoids.
     """
     context.require("asset:write")
     key = asset_service.object_key(context.project, relative)
-    declared = int(request.headers.get("Content-Length") or 0)
-    if declared > MAX_UPLOAD_BYTES:
-        raise ValidationError("file troppo grande per l'upload diretto")
-    body = await request.body()
-    if len(body) > MAX_UPLOAD_BYTES:
-        raise ValidationError("file troppo grande per l'upload diretto")
-    stored = storage.put(key, body, request.headers.get("Content-Type", ""))
+    stored = await receive_object(
+        request, storage, key, content_type=request.headers.get("Content-Type", "")
+    )
     asset = asset_service.register(
         context.session,
         context.project,
