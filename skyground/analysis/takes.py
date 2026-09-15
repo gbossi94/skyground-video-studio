@@ -124,6 +124,115 @@ def similarity(left: str, right: str) -> float:
     return max(0.45 * jaccard + 0.55 * subsequence, prefix)
 
 
+# -------------------------------------------------------------------- restarts
+
+
+@dataclass(frozen=True)
+class Restart:
+    """A run-up the speaker abandoned and said again.
+
+    Not a retake between two utterances — those are handled by the grouping
+    below — but the far more common thing a person does when talking to camera:
+    they start a clause, stumble, and start it again without pausing long enough
+    to make it a separate utterance. The engine used to be blind to this, and on
+    the reference footage that blindness was most of the material an editor cut.
+    """
+
+    #: The words to drop, as indices into the transcript. Inclusive.
+    first_word: int
+    last_word: int
+    kind: str
+    detail: str
+    #: True when the repetition is literal enough to act on without asking.
+    certain: bool
+
+    @property
+    def word_count(self) -> int:
+        return self.last_word - self.first_word + 1
+
+
+#: A literal repeat of at least this many words is a restart, not rhetoric.
+CERTAIN_REPEAT = 3
+#: How many words may sit between the abandoned attempt and the new one. More
+#: than this and the two occurrences are probably both meant.
+MAX_STUMBLE = 3
+
+
+def find_restarts(utterances: list[Utterance], words: list[Word]) -> list[Restart]:
+    """Find, inside each utterance, a phrase said twice in a row."""
+    found: list[Restart] = []
+    for utterance in utterances:
+        chunk = words[utterance.first_word : utterance.last_word + 1]
+        forms = [normalize(word.s).strip(".,!?…'\"") for word in chunk]
+        best = _longest_repeat(forms)
+        if best is None:
+            continue
+        start, size, second = best
+        # Everything from the first attempt up to the second one is the run-up.
+        first_word = utterance.first_word + start
+        last_word = utterance.first_word + second - 1
+        skipped = second - (start + size)
+        phrase = " ".join(forms[second : second + size])
+        found.append(
+            Restart(
+                first_word=first_word,
+                last_word=last_word,
+                kind="ripartenza",
+                detail=f"«{phrase}» detto due volte di fila",
+                certain=size >= CERTAIN_REPEAT and skipped <= 1,
+            )
+        )
+    return found
+
+
+def _longest_repeat(forms: list[str]) -> tuple[int, int, int] | None:
+    """The longest phrase repeated close to itself: (start, length, second start)."""
+    limit = min(8, len(forms) // 2)
+    for size in range(limit, 1, -1):
+        for start in range(len(forms) - size * 2 + 1):
+            first = forms[start : start + size]
+            if not any(token for token in first):
+                continue
+            for second in range(start + size, min(start + size + MAX_STUMBLE + 1, len(forms) - size + 1)):
+                if forms[second : second + size] == first:
+                    return start, size, second
+    return None
+
+
+def find_abandoned_starts(
+    utterances: list[Utterance], *, within_seconds: float = 6.0
+) -> list[Restart]:
+    """An utterance that is the opening of the next one, said and left.
+
+    «Oppure cerchi di cambiare.» followed by «Oppure cerchi di cambiare, oppure
+    scommetti sull'online…» is one line, attempted twice. Similarity alone does
+    not catch it: the two are very different in length, which is exactly what
+    the ratio-based score punishes.
+    """
+    found: list[Restart] = []
+    for current, following in zip(utterances, utterances[1:], strict=False):
+        if following.start - current.end > within_seconds:
+            continue
+        head, tail = tokens(current.text), tokens(following.text)
+        if len(head) < 2 or len(tail) <= len(head):
+            continue
+        if tail[: len(head)] != head:
+            continue
+        found.append(
+            Restart(
+                first_word=current.first_word,
+                last_word=current.last_word,
+                kind="prefisso-abbandonato",
+                detail=(
+                    f"«{current.text[:60]}» è l'inizio della battuta che segue, "
+                    "lasciata a metà"
+                ),
+                certain=len(head) >= CERTAIN_REPEAT,
+            )
+        )
+    return found
+
+
 # ---------------------------------------------------------------------- groups
 
 

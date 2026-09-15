@@ -10,6 +10,7 @@ work with the standard library alone. The cloud commands (`serve`, `db`, `users`
 from __future__ import annotations
 
 import argparse
+import pathlib
 import getpass
 import os
 import sys
@@ -34,6 +35,17 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("project")
     validate = subcommands.add_parser("validate", help="valida uno o tutti i progetti")
     validate.add_argument("project", nargs="?")
+
+    evaluate = subcommands.add_parser(
+        "evaluate", help="confronta la proposta del motore col montaggio approvato"
+    )
+    evaluate.add_argument("project")
+    evaluate.add_argument(
+        "--transcript",
+        required=True,
+        help="trascrizione del girato (JSON con words, silences, duration)",
+    )
+    evaluate.add_argument("--json", action="store_true", help="solo i numeri, per uno script")
 
     serve = subcommands.add_parser("serve", help="avvia il pannello")
     serve.add_argument("--host", default=None)
@@ -72,7 +84,56 @@ def build_parser() -> argparse.ArgumentParser:
 # ------------------------------------------------------------------ editorial
 
 
+def run_evaluate(args, workspace: Workspace) -> int:
+    """Score the engine against the edit a person approved.
+
+    The reference is `timeline.json`: the clips that were actually kept. Without
+    a number the engine can drift for a whole day while everybody believes it is
+    roughly right.
+    """
+    import json
+
+    from skyground.analysis import evaluation
+    from skyground.analysis.cut import plan_cut
+    from skyground.analysis.models import Analysis, Silence, Word
+
+    def as_silence(span) -> Silence:
+        if isinstance(span, dict):
+            return Silence(float(span["start"]), float(span["end"]))
+        return Silence(float(span[0]), float(span[1]))
+
+    raw = json.loads(pathlib.Path(args.transcript).read_text(encoding="utf-8"))
+    analysis = Analysis(
+        source=raw.get("source", "assets/raw.mov"),
+        duration=float(raw["duration"]),
+        words=[Word.from_dict(word) for word in raw["words"]],
+        silences=[as_silence(span) for span in raw.get("silences", [])],
+    )
+    timeline = workspace.read_document(args.project, "timeline.json")
+    reference = [(clip["start"], clip["end"]) for clip in timeline["clips"]]
+
+    plan = plan_cut(analysis)
+    score = evaluation.compare([(s.start, s.end) for s in plan.segments], reference)
+
+    if args.json:
+        print(json.dumps(score.as_dict(), indent=2))
+        return 0
+
+    print(score.summary())
+    print(f"domande aperte: {sum(1 for q in plan.questions if not q.resolved)}")
+    print(f"\nTENUTO DAL MOTORE, SCARTATO DALL'EDITOR ({len(score.extra)} pezzi):")
+    for line in evaluation.describe(score.extra, analysis.words):
+        print("  " + line)
+    if score.missing:
+        print(f"\nTENUTO DALL'EDITOR, SCARTATO DAL MOTORE ({len(score.missing)} pezzi):")
+        for line in evaluation.describe(score.missing, analysis.words):
+            print("  " + line)
+    return 0
+
+
 def run_editorial(args, workspace: Workspace) -> int | None:
+    if args.command == "evaluate":
+        return run_evaluate(args, workspace)
     if args.command == "list":
         for project in workspace.list_projects():
             print(f"{project['id']:<32} {project['status']:<12} {project['name']}")

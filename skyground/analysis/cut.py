@@ -18,10 +18,10 @@ That is the intended trade: the engine never shortens the video by guessing.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 
-from skyground.analysis import takes
+from skyground.analysis import align, takes
 from skyground.analysis.models import (
     ASK_PAUSE_INTENT,
     ASK_TAKE_CHOICE,
@@ -84,6 +84,15 @@ def plan_cut(
     """
     policy = policy or CutPolicy()
     decisions = dict(decisions or {})
+    # Whisper's word ends run into the pauses that follow them, and every cut
+    # here is decided by looking for gaps between words: a pause hidden inside
+    # an inflated word is a pause this engine cannot see. The audio measured its
+    # own silence, and where the two disagree the audio is right.
+    #
+    # Corrected once, into the analysis itself, so that nothing downstream can
+    # reach past it to the original timings — which is exactly the mistake that
+    # made the first attempt at this fix do nothing at all.
+    analysis = replace(analysis, words=align.clamp_words(analysis.words, analysis.silences))
     words = analysis.words
 
     plan = CutPlan(
@@ -176,8 +185,29 @@ def plan_cut(
         utterances[index].kept = False
         utterances[index].drop_reason = reason
 
-    # ----------------------------------------------------------- the segments
+    # ------------------------------------------------ run-ups said twice over
+    # A person talking to camera stumbles far more often than they re-shoot a
+    # whole line, and the stumble happens inside a single breath. Comparing
+    # utterances to each other cannot see it; this can.
     kept_words = _kept_word_flags(utterances, len(words))
+    restarts = takes.find_restarts(utterances, words) + takes.find_abandoned_starts(utterances)
+    for restart in restarts:
+        if not any(kept_words[restart.first_word : restart.last_word + 1]):
+            continue  # already gone with its utterance
+        question_id = f"restart:{restart.first_word}-{restart.last_word}"
+        answer = decisions.get(question_id)
+        if answer is None and restart.certain:
+            _drop_words(kept_words, restart)
+            plan.restarts.append(restart_as_dict(restart, words))
+            continue
+        question = _restart_question(question_id, restart, words)
+        question.answer = answer
+        plan.questions.append(question)
+        if answer == "cut":
+            _drop_words(kept_words, restart)
+            plan.restarts.append(restart_as_dict(restart, words))
+
+    # ----------------------------------------------------------- the segments
     plan.segments = _build_segments(analysis, utterances, kept_words, policy, plan, decisions)
     plan.removed = _classify_removed(analysis, plan.segments, utterances, dropped)
 
@@ -186,6 +216,50 @@ def plan_cut(
 
 
 # --------------------------------------------------------------------- pieces
+
+
+def _drop_words(kept: list[bool], restart: takes.Restart) -> None:
+    for index in range(restart.first_word, restart.last_word + 1):
+        kept[index] = False
+
+
+def restart_as_dict(restart: takes.Restart, words: list) -> dict:
+    return {
+        "kind": restart.kind,
+        "start": round(words[restart.first_word].t, 3),
+        "end": round(words[restart.last_word].end, 3),
+        "detail": restart.detail,
+        "words": restart.word_count,
+    }
+
+
+def _restart_question(question_id: str, restart: takes.Restart, words: list) -> Question:
+    said = " ".join(word.s for word in words[restart.first_word : restart.last_word + 1])
+    start, end = words[restart.first_word].t, words[restart.last_word].end
+    return Question(
+        id=question_id,
+        kind=ASK_TAKE_CHOICE,
+        at=start,
+        prompt="Questa ripartenza si taglia?",
+        context=f"{restart.detail}. Il pezzo che toglierei è: «{said[:120]}»",
+        options=[
+            Option(
+                id="cut",
+                label="Togliere il primo tentativo",
+                detail=f"{end - start:.1f}s · resta la ripresa buona",
+                recommended=True,
+                start=start,
+                end=end,
+            ),
+            Option(
+                id="keep",
+                label="Tenere tutto",
+                detail="La ripetizione è voluta.",
+                start=max(0.0, start - 1.0),
+                end=end + 2.0,
+            ),
+        ],
+    )
 
 
 def _kept_word_flags(utterances: list[Utterance], total: int) -> list[bool]:

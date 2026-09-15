@@ -373,6 +373,10 @@ class CutPlan:
     questions: list[Question] = field(default_factory=list)
     utterances: list[Utterance] = field(default_factory=list)
     takes: list[TakeGroup] = field(default_factory=list)
+    #: Run-ups removed from inside an utterance — the stumble-and-start-again
+    #: that is most of what an editor actually cuts. Kept so the reasoning is
+    #: readable afterwards, like every other removal.
+    restarts: list[dict] = field(default_factory=list)
     policy: dict[str, Any] = field(default_factory=dict)
     generated_at: str = ""
     applied_at: str = ""
@@ -428,6 +432,7 @@ class CutPlan:
             "questions": [question.as_dict() for question in self.questions],
             "utterances": [utterance.as_dict() for utterance in self.utterances],
             "takes": [take.as_dict() for take in self.takes],
+            "restarts": list(self.restarts),
         }
 
     @staticmethod
@@ -457,6 +462,7 @@ class CutPlan:
                     drop_reason=item.get("dropReason", ""),
                 )
             )
+        plan.restarts = list(value.get("restarts", []))
         for item in value.get("takes", []):
             plan.takes.append(
                 TakeGroup(
