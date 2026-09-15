@@ -136,7 +136,7 @@ def test_a_mid_sentence_pause_is_asked_about_not_assumed():
     first, end = speak(1.0, "e quindi ti invito a fare")
     second, _ = speak(end + 1.6, "una scommessa seria questa volta.")
     analysis = analysis_of(first, second)
-    plan = plan_cut(analysis)
+    plan = plan_cut(analysis, CutPolicy(ask_when_unsure=True))
 
     asked = [item for item in plan.questions if item.kind == ASK_PAUSE_INTENT]
     assert len(asked) == 1
@@ -180,7 +180,7 @@ def test_an_echo_far_away_is_not_treated_as_a_retake():
 
 def test_a_close_call_between_takes_becomes_a_question(restarted_sentence):
     """Two good attempts at the same line: the engine must not pick one."""
-    plan = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9))
+    plan = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9, ask_when_unsure=True))
     question = next(item for item in plan.questions if item.kind == ASK_TAKE_CHOICE)
     assert plan.status == "draft"
     # Nothing was thrown away while the question is open.
@@ -190,33 +190,36 @@ def test_a_close_call_between_takes_becomes_a_question(restarted_sentence):
 
 
 def test_a_clear_winner_is_decided_without_asking():
-    """One attempt trails off unfinished; that is a fact, not a preference."""
+    """One attempt trails off unfinished; that is a fact, not a preference.
+
+    The decision is still written down — every one of them is — but it does not
+    stop the plan from being applied.
+    """
     aborted, end = speak(1.0, "se il tuo centro è")
     complete, _ = speak(end + 2.0, "se il tuo centro è bloccato sei nel fango.")
     analysis = analysis_of(aborted, complete)
     plan = plan_cut(analysis, CutPolicy(decide_margin=0.05))
 
-    assert not [item for item in plan.questions if item.kind == ASK_TAKE_CHOICE]
+    assert not [item for item in plan.questions if not item.resolved]
     assert [item for item in plan.removed if item.reason == REASON_RETAKE]
 
 
 def test_answering_a_take_question_honours_the_answer(restarted_sentence):
-    plan = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9))
+    """Whichever attempt the answer names is the one left standing."""
+    policy = CutPolicy(decide_margin=0.9, ask_when_unsure=True)
+    plan = plan_cut(restarted_sentence, policy)
     question = next(item for item in plan.questions if item.kind == ASK_TAKE_CHOICE)
-    first_option = next(o for o in question.options if o.id.startswith("utterance:"))
 
-    resolved = plan_cut(
-        restarted_sentence, CutPolicy(decide_margin=0.9), {question.id: first_option.id}
-    )
-    kept = int(first_option.id.split(":")[1])
-    assert resolved.utterances[kept].kept is True
+    resolved = plan_cut(restarted_sentence, policy, {question.id: "first"})
+
+    assert resolved.utterances[0].kept is True
     assert any(not utterance.kept for utterance in resolved.utterances)
 
 
 def test_keeping_both_takes_removes_neither(restarted_sentence):
-    plan = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9))
+    plan = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9, ask_when_unsure=True))
     question = next(item for item in plan.questions if item.kind == ASK_TAKE_CHOICE)
-    resolved = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9), {question.id: "keep-both"})
+    resolved = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9, ask_when_unsure=True), {question.id: "keep-both"})
     assert all(utterance.kept for utterance in resolved.utterances)
 
 
@@ -224,21 +227,21 @@ def test_keeping_both_takes_removes_neither(restarted_sentence):
 
 
 def test_a_plan_with_an_open_question_is_not_applicable(restarted_sentence):
-    plan = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9))
+    plan = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9, ask_when_unsure=True))
     ok, problems = invariants.applicable(plan, restarted_sentence)
     assert ok is False
     assert any("domanda aperta" in problem for problem in problems)
 
 
 def test_applying_an_undecided_plan_is_refused(restarted_sentence):
-    plan = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9))
+    plan = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9, ask_when_unsure=True))
     with pytest.raises(ValidationError) as error:
         pipeline.apply_to_timeline(plan, restarted_sentence, {"source": "assets/raw.mov"})
     assert "non è applicabile" in str(error.value)
 
 
 def test_an_answered_plan_becomes_a_timeline(restarted_sentence):
-    plan = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9))
+    plan = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9, ask_when_unsure=True))
     current = plan
     while current.open_questions:
         question = current.open_questions[0]
@@ -258,7 +261,7 @@ def test_an_answered_plan_becomes_a_timeline(restarted_sentence):
 
 
 def test_an_answer_is_remembered_after_the_rebuild(restarted_sentence):
-    plan = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9))
+    plan = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9, ask_when_unsure=True))
     question = plan.open_questions[0]
     rebuilt = pipeline.answer(
         restarted_sentence, plan, question.id, question.options[0].id, answered_by="gabriele"
@@ -270,7 +273,7 @@ def test_an_answer_is_remembered_after_the_rebuild(restarted_sentence):
 
 
 def test_an_unknown_answer_is_refused(restarted_sentence):
-    plan = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9))
+    plan = plan_cut(restarted_sentence, CutPolicy(decide_margin=0.9, ask_when_unsure=True))
     question = plan.open_questions[0]
     with pytest.raises(ValidationError):
         pipeline.answer(restarted_sentence, plan, question.id, "utterance:999")
@@ -291,8 +294,13 @@ class FakeAdviser:
         return self.pairs
 
 
-def test_an_adviser_can_only_raise_questions_never_remove():
-    """A reformulation the word comparison cannot see, found by meaning."""
+def test_an_adviser_raises_candidates_and_the_engine_decides_them():
+    """A reformulation the word comparison cannot see, found by meaning.
+
+    The adviser proposes; it never edits. What happens to its proposal is the
+    engine's call, taken and written down — the same treatment every other close
+    call gets since the engine stopped handing its uncertainty to a person.
+    """
     first, end = speak(1.0, "il primo passo è una call conoscitiva.")
     second, _ = speak(end + 2.0, "parliamone mezz'ora insieme senza impegno.")
     analysis = analysis_of(first, second)
@@ -300,12 +308,31 @@ def test_an_adviser_can_only_raise_questions_never_remove():
     plain = plan_cut(analysis)
     assert not plain.questions
 
-    advised = pipeline.propose(analysis, adviser=FakeAdviser([{"a": 0, "b": 1, "why": "stesso invito"}]))
+    advised = pipeline.propose(
+        analysis, adviser=FakeAdviser([{"a": 0, "b": 1, "why": "stesso invito"}])
+    )
     assert len(advised.questions) == 1
+    recorded = advised.questions[0]
+    assert recorded.resolved is True
+    assert recorded.answered_by == "motore"
+    assert advised.status == "ready"
+
+
+def test_an_adviser_candidate_still_blocks_when_asked_to(restarted_sentence):
+    """The old behaviour is a setting, not a thing that was deleted."""
+    first, end = speak(1.0, "il primo passo è una call conoscitiva.")
+    second, _ = speak(end + 2.0, "parliamone mezz'ora insieme senza impegno.")
+    analysis = analysis_of(first, second)
+
+    advised = plan_cut(
+        analysis,
+        CutPolicy(ask_when_unsure=True),
+        suspects=[{"a": 0, "b": 1, "why": "stesso invito"}],
+    )
     assert advised.status == "draft"
-    # It suggested, it did not cut: both utterances are still in the edit.
+    assert advised.open_questions
+    # Nothing left the edit while the question stands.
     assert all(utterance.kept for utterance in advised.utterances)
-    assert advised.output_duration == plain.output_duration
 
 
 def test_a_broken_adviser_costs_nothing():

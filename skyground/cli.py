@@ -93,8 +93,8 @@ def run_evaluate(args, workspace: Workspace) -> int:
     """
     import json
 
-    from skyground.analysis import evaluation
-    from skyground.analysis.cut import plan_cut
+    from skyground.analysis import evaluation, pipeline
+    from skyground.analysis.adviser import build_adviser
     from skyground.analysis.models import Analysis, Silence, Word
 
     def as_silence(span) -> Silence:
@@ -112,7 +112,10 @@ def run_evaluate(args, workspace: Workspace) -> int:
     timeline = workspace.read_document(args.project, "timeline.json")
     reference = [(clip["start"], clip["end"]) for clip in timeline["clips"]]
 
-    plan = plan_cut(analysis)
+    # Through `propose`, not `plan_cut`: the adviser is part of what production
+    # runs, so a number that leaves it out measures a different engine.
+    adviser = build_adviser()
+    plan = pipeline.propose(analysis, adviser=adviser)
     score = evaluation.compare([(s.start, s.end) for s in plan.segments], reference)
 
     if args.json:
@@ -120,7 +123,11 @@ def run_evaluate(args, workspace: Workspace) -> int:
         return 0
 
     print(score.summary())
-    print(f"domande aperte: {sum(1 for q in plan.questions if not q.resolved)}")
+    decided = sum(1 for q in plan.questions if q.answered_by == "motore")
+    print(
+        f"domande aperte: {sum(1 for q in plan.questions if not q.resolved)}"
+        f" · decise dal motore: {decided} · consulente: {adviser.name}"
+    )
     print(f"\nTENUTO DAL MOTORE, SCARTATO DALL'EDITOR ({len(score.extra)} pezzi):")
     for line in evaluation.describe(score.extra, analysis.words):
         print("  " + line)

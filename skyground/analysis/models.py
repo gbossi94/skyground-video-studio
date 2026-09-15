@@ -377,6 +377,10 @@ class CutPlan:
     #: that is most of what an editor actually cuts. Kept so the reasoning is
     #: readable afterwards, like every other removal.
     restarts: list[dict] = field(default_factory=list)
+    #: Whole stretches of script delivered twice, and which delivery won. A
+    #: passage is the unit an editor actually chooses between; comparing single
+    #: lines left two thirds of every discarded attempt in the edit.
+    passages: list[dict] = field(default_factory=list)
     policy: dict[str, Any] = field(default_factory=dict)
     generated_at: str = ""
     applied_at: str = ""
@@ -433,6 +437,7 @@ class CutPlan:
             "utterances": [utterance.as_dict() for utterance in self.utterances],
             "takes": [take.as_dict() for take in self.takes],
             "restarts": list(self.restarts),
+            "passages": list(self.passages),
         }
 
     @staticmethod
@@ -463,6 +468,7 @@ class CutPlan:
                 )
             )
         plan.restarts = list(value.get("restarts", []))
+        plan.passages = list(value.get("passages", []))
         for item in value.get("takes", []):
             plan.takes.append(
                 TakeGroup(

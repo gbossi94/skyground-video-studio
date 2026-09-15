@@ -9,6 +9,26 @@ const KIND_LABEL: Record<string, string> = {
   "low-confidence": "Trascrizione incerta",
 };
 
+/** What `answeredBy` says when nobody was asked. */
+export const ENGINE = "motore";
+
+const decidedByEngine = (question: Question) =>
+  question.resolved && question.answeredBy === ENGINE;
+
+/** The order the screen walks you through: first anything the engine would not
+ *  decide, then everything it decided on your behalf.
+ *
+ *  The second half is the point. The engine no longer stops to ask, so without
+ *  this the choices it made would be invisible — the screen would say "nessuna
+ *  ambiguità" over an edit full of them. A decision you cannot see is not a
+ *  decision you made. */
+export function reviewQueue(questions: Question[]): Question[] {
+  return [
+    ...questions.filter((question) => !question.resolved),
+    ...questions.filter(decidedByEngine),
+  ];
+}
+
 interface Props {
   questions: Question[];
   selected: Question | null;
@@ -19,12 +39,10 @@ interface Props {
   onListen: (question: Question, option: Option) => void;
 }
 
-/** The heart of the screen. Everything the engine refused to decide comes here,
- *  and the plan stays unapplicable until none is left.
+/** The heart of the screen: every judgement call in the edit, one at a time.
  *
- *  One question at a time, on purpose: six of them stacked made a page two
- *  screens tall, which meant scrolling away from the video you need in order to
- *  answer. Deciding is the work; everything else is context. */
+ *  One at a time on purpose — six of them stacked made a page two screens tall,
+ *  which meant scrolling away from the video you need in order to answer. */
 export function Questions({
   questions,
   selected,
@@ -34,32 +52,34 @@ export function Questions({
   onAnswer,
   onListen,
 }: Props) {
-  const open = questions.filter((question) => !question.resolved);
-  const answered = questions.filter((question) => question.resolved);
-  const current = selected && !selected.resolved ? selected : open[0] ?? null;
-  const position = current ? open.findIndex((question) => question.id === current.id) : -1;
+  const queue = reviewQueue(questions);
+  const confirmed = questions.filter((question) => question.resolved && !decidedByEngine(question));
+  const current = queue.find((question) => question.id === selected?.id) ?? queue[0] ?? null;
+  const position = current ? queue.findIndex((question) => question.id === current.id) : -1;
 
   if (!current) {
     return (
       <aside className="decide decide-clear">
-        <p className="eyebrow">DA DECIDERE</p>
-        <h2>Nessuna ambiguità</h2>
+        <p className="eyebrow">DECISIONI</p>
+        <h2>Tutto rivisto</h2>
         <p className="hint">
-          {answered.length > 0
-            ? `${answered.length} decise. Il montaggio si può applicare.`
-            : "Il motore non ha trovato casi dubbi: il montaggio si può applicare."}
+          {confirmed.length > 0
+            ? `${confirmed.length} confermate a mano. Il montaggio si può applicare.`
+            : "Nessun caso dubbio in questo girato: il montaggio si può applicare."}
         </p>
-        {answered.length > 0 && <Answered questions={answered} onSelect={onSelect} />}
+        {confirmed.length > 0 && <Answered questions={confirmed} onSelect={onSelect} />}
       </aside>
     );
   }
 
+  const reviewing = decidedByEngine(current);
+
   return (
-    <aside className="decide">
+    <aside className={reviewing ? "decide decide-review" : "decide"}>
       <header className="decide-head">
         <div>
           <p className="eyebrow">
-            DA DECIDERE · {position + 1} di {open.length}
+            {reviewing ? "DECISE DAL MOTORE" : "DA DECIDERE"} · {position + 1} di {queue.length}
           </p>
           <h2>{current.prompt}</h2>
         </div>
@@ -67,15 +87,15 @@ export function Questions({
           <button
             className="ghost small"
             disabled={position <= 0}
-            onClick={() => onSelect(open[position - 1])}
+            onClick={() => onSelect(queue[position - 1])}
             aria-label="Domanda precedente"
           >
             ←
           </button>
           <button
             className="ghost small"
-            disabled={position < 0 || position >= open.length - 1}
-            onClick={() => onSelect(open[position + 1])}
+            disabled={position < 0 || position >= queue.length - 1}
+            onClick={() => onSelect(queue[position + 1])}
             aria-label="Domanda successiva"
           >
             →
@@ -88,41 +108,51 @@ export function Questions({
         <span className="at">a {formatTime(current.at)}</span>
       </p>
       <p className="context">{current.context}</p>
+      {reviewing && (
+        <p className="hint">
+          Il motore ha già scelto e il montaggio ne tiene conto. Ascolta e conferma, oppure
+          cambia: la proposta si rifà attorno alla tua scelta.
+        </p>
+      )}
 
       <div className="options">
-        {current.options.map((option) => (
-          <div
-            key={option.id}
-            className={option.recommended ? "option recommended" : "option"}
-          >
-            <div className="option-text">
-              <b>{option.label}</b>
-              {option.detail && <small>{option.detail}</small>}
-            </div>
-            <div className="option-actions">
-              {option.start !== undefined && option.end !== undefined && (
+        {current.options.map((option) => {
+          const taken = reviewing && option.id === current.answer;
+          const classes = ["option"];
+          if (taken) classes.push("taken");
+          else if (option.recommended && !reviewing) classes.push("recommended");
+          return (
+            <div key={option.id} className={classes.join(" ")}>
+              <div className="option-text">
+                <b>{option.label}</b>
+                {option.detail && <small>{option.detail}</small>}
+              </div>
+              <div className="option-actions">
+                {option.start !== undefined && option.end !== undefined && (
+                  <button
+                    className="listen"
+                    onClick={() => onListen(current, option)}
+                    aria-label={`Ascolta: ${option.label}`}
+                  >
+                    {playingOption === option.id ? "◼ ferma" : "▶ ascolta"}
+                  </button>
+                )}
                 <button
-                  className="listen"
-                  onClick={() => onListen(current, option)}
-                  aria-label={`Ascolta: ${option.label}`}
+                  className="choose"
+                  disabled={busy === current.id}
+                  onClick={() => onAnswer(current, option.id)}
                 >
-                  {playingOption === option.id ? "◼ ferma" : "▶ ascolta"}
+                  {busy === current.id ? "…" : taken ? "Confermo" : "Scegli"}
                 </button>
-              )}
-              <button
-                className="choose"
-                disabled={busy === current.id}
-                onClick={() => onAnswer(current, option.id)}
-              >
-                {busy === current.id ? "…" : "Scegli"}
-              </button>
+              </div>
+              {taken && <i className="badge">scelta dal motore</i>}
+              {!taken && option.recommended && !reviewing && <i className="badge">consigliata</i>}
             </div>
-            {option.recommended && <i className="badge">consigliata</i>}
-          </div>
-        ))}
+          );
+        })}
       </div>
 
-      {answered.length > 0 && <Answered questions={answered} onSelect={onSelect} />}
+      {confirmed.length > 0 && <Answered questions={confirmed} onSelect={onSelect} />}
     </aside>
   );
 }
@@ -136,7 +166,7 @@ function Answered({
 }) {
   return (
     <details className="answered">
-      <summary>{questions.length} già decise</summary>
+      <summary>{questions.length} confermate a mano</summary>
       {questions.map((question) => (
         <button key={question.id} className="answered-row" onClick={() => onSelect(question)}>
           <b>{formatTime(question.at)}</b>

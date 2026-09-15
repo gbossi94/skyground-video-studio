@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 
 from skyground.analysis import audio, invariants
 from skyground.analysis.adviser import Adviser, NullAdviser
-from skyground.analysis.cut import CutPolicy, plan_cut
+from skyground.analysis.cut import ENGINE, CutPolicy, plan_cut
 from skyground.analysis.models import Analysis, CutPlan
 from skyground.analysis.transcription import Transcriber
 from skyground.errors import ValidationError
@@ -79,11 +79,17 @@ def propose(
 
 
 def decisions_from(plan: CutPlan) -> dict[str, str]:
-    """The answers already given, so a rebuild does not ask them again."""
+    """The answers a *person* gave, so a rebuild does not ask them again.
+
+    What the engine decided on its own is deliberately left out: those are not
+    instructions, they are conclusions, and a rebuild should reach them again
+    from the material — in the light of whatever the person has decided since.
+    A choice made by hand is the one thing a rebuild must never overturn.
+    """
     return {
         question.id: question.answer
         for question in plan.questions
-        if question.answer is not None
+        if question.answer is not None and question.answered_by != ENGINE
     }
 
 
@@ -108,11 +114,14 @@ def answer(
     decisions[question_id] = option_id
     rebuilt = propose(analysis, policy=policy, decisions=decisions, adviser=adviser)
 
-    # Carry the answers onto the rebuilt questions so the record survives.
+    # Carry the answers onto the rebuilt questions so the record survives —
+    # including *who* answered, which is the whole difference between a choice
+    # the person made and one the engine reached on their behalf.
+    was = {item.id: item.answered_by for item in plan.questions if item.answer is not None}
     for item in rebuilt.questions:
         if item.id in decisions:
             item.answer = decisions[item.id]
-            item.answered_by = answered_by if item.id == question_id else None
+            item.answered_by = answered_by if item.id == question_id else was.get(item.id)
     _remember_answered(rebuilt, plan, decisions, answered_by, question_id)
     return rebuilt
 

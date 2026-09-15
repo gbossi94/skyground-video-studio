@@ -249,6 +249,75 @@ def find_abandoned_starts(
 # ---------------------------------------------------------------------- groups
 
 
+#: Parole condivise in apertura che bastano a dire «ha ricominciato da capo».
+SHARED_OPENING = 2
+#: …o, in mancanza di un'apertura comune, quanto devono somigliarsi in tutto.
+NEARLY_IDENTICAL = 0.85
+#: Un'apertura condivisa così lunga è già una prova: due frasi che cominciano
+#: con le stesse cinque parole non lo fanno per caso.
+STRONG_OPENING = 4
+#: Quante parole di rilancio una ripresa può portarsi davanti.
+RUN_UP = 2
+
+#: …e quali. Solo queste: connettivi e segnali di discorso, cioè parole che
+#: rilanciano senza dire niente. La versione che saltava *qualsiasi* parola
+#: appaiava «prima parte della frase» a «seconda parte della frase» — le due
+#: cose che il motore non deve confondere mai, perché confonderle cancella una
+#: frase che qualcuno voleva dire.
+RUN_UP_WORDS = frozenset(
+    {
+        "o", "e", "ma", "poi", "quindi", "allora", "ancora", "oppure", "dunque",
+        "insomma", "cioe", "niente", "no", "ok", "ecco", "beh", "va", "bene",
+    }
+)
+
+
+def _run_up(tokens_of: list[str]) -> int:
+    """How many opening words are rilancio rather than the line itself."""
+    count = 0
+    for token in tokens_of[:RUN_UP]:
+        if token not in RUN_UP_WORDS:
+            break
+        count += 1
+    return count
+
+
+def _opening_overlap(left: str, right: str) -> int:
+    """Shared opening words, ignoring a discourse run-up on either side.
+
+    «scommetti sull'online e quindi apri…» and «O ancora scommetti sull'online e
+    quindi stai pagando…» are the same line attempted twice, and the second
+    attempt says *more* — so overall similarity falls exactly where the evidence
+    is strongest. The evidence is the opening, and «o ancora» is not part of it.
+    """
+    head, tail = tokens(left), tokens(right)
+    best = 0
+    for drop_left in range(_run_up(head) + 1):
+        for drop_right in range(_run_up(tail) + 1):
+            best = max(best, _prefix_match(head[drop_left:], tail[drop_right:]))
+    return best
+
+
+def _restarts_the_same_line(left: str, right: str) -> bool:
+    """Whether the second is another go at the first, or simply what came next.
+
+    Somebody re-shooting a line starts it again from the top: «Se il tuo centro
+    estetico…» twice. Somebody carrying on does not. Vocabulary overlap alone
+    cannot tell the two apart — «prima parte della frase» and «seconda parte
+    della frase» share three words out of four — and while an uncertain pairing
+    only produced a question that mattered little. Now that the engine decides
+    for itself, a wrong pairing deletes a sentence somebody meant to say.
+    """
+    head, tail = tokens(left), tokens(right)
+    if not head or not tail:
+        return False
+    if _prefix_match(head, tail) >= SHARED_OPENING:
+        return True
+    if _opening_overlap(left, right) >= STRONG_OPENING:
+        return True
+    return similarity(left, right) >= NEARLY_IDENTICAL
+
+
 def group_takes(
     utterances: list[Utterance],
     *,
@@ -269,7 +338,14 @@ def group_takes(
         for other in utterances[position + 1 : position + 1 + lookahead]:
             if other.start - utterance.end > window_seconds:
                 break
-            if similarity(utterance.text, other.text) < threshold:
+            # Either they look alike overall, or they open the same way for
+            # long enough that the divergence *is* the second attempt saying
+            # more. The first test alone missed every retake that finished the
+            # sentence the first attempt abandoned.
+            alike = similarity(utterance.text, other.text) >= threshold
+            if not alike and _opening_overlap(utterance.text, other.text) < STRONG_OPENING:
+                continue
+            if not _restarts_the_same_line(utterance.text, other.text):
                 continue
             group_id = assigned.get(utterance.index)
             if group_id is None:
@@ -285,6 +361,183 @@ def group_takes(
         for index in group.utterances:
             utterances[index].take_group = group.id
     return groups
+
+
+# ------------------------------------------------------------------- passages
+
+#: Una pausa così lunga non è un respiro: chi parla si è fermato e sta per
+#: cominciare un'altra cosa. È il confine naturale di una ripresa, e quindi il
+#: punto dove il secondo tentativo finisce.
+RESET_PAUSE = 3.0
+#: Quante volte il copione del primo tentativo può ridirlo il secondo prima che
+#: smetta di essere una ripresa e diventi semplicemente il seguito. Senza questo
+#: tetto una pausa che non arriva mai si porta via mezzo video.
+RUNAWAY = 2.5
+#: Sotto questo numero di parole un enunciato è un inciampo, non una frase: non
+#: decide dove finisce un passaggio, ci sta dentro.
+FRAGMENT = 4
+
+
+@dataclass(frozen=True)
+class Passage:
+    """One attempt at a stretch of script: consecutive utterances, one go."""
+
+    utterances: list[int]
+    start: float
+    end: float
+    text: str
+
+
+@dataclass(frozen=True)
+class Retake:
+    """Two attempts at the same stretch, and which is which in time."""
+
+    first: Passage
+    second: Passage
+    detail: str
+
+
+def _passage(indices: list[int], utterances: list[Utterance]) -> Passage:
+    return Passage(
+        utterances=list(indices),
+        start=utterances[indices[0]].start,
+        end=utterances[indices[-1]].end,
+        text=" ".join(utterances[index].text for index in indices),
+    )
+
+
+def find_retaken_passages(
+    utterances: list[Utterance], *, threshold: float = 0.62, lookahead: int = 4
+) -> list[Retake]:
+    """Whole passages said twice, not single lines.
+
+    This is what the reference footage is mostly made of, and what comparing
+    utterances one by one cannot see. The speaker delivers three sentences,
+    stops, and delivers the same three again — so the engine would find one
+    matching pair in the middle of it, drop that single line, and leave the
+    other two thirds of the discarded attempt in the edit. Twenty-three seconds
+    of the measured excess were exactly this.
+
+    A passage is grown from a matching pair outwards: everything after the
+    second attempt's opening that still re-covers ground the first attempt
+    already covered belongs to the second attempt, and the fragments in between
+    — a «base», an «o» — come along rather than ending it.
+    """
+    found: list[Retake] = []
+    spoken_for: set[int] = set()
+
+    for position, utterance in enumerate(utterances):
+        for offset in range(1, lookahead + 1):
+            later = position + offset
+            if later >= len(utterances):
+                break
+            other = utterances[later]
+            alike = similarity(utterance.text, other.text) >= threshold
+            if not alike and _opening_overlap(utterance.text, other.text) < STRONG_OPENING:
+                continue
+            if not _restarts_the_same_line(utterance.text, other.text):
+                continue
+            if position in spoken_for or later in spoken_for:
+                continue
+
+            first = list(range(position, later))
+            # The stumble the speaker makes *into* the retake belongs to the
+            # retake, not to the take it replaces.
+            while len(first) > 1 and _restarts_the_same_line(
+                utterances[first[-1]].text, other.text
+            ):
+                first.pop()
+            second = list(range(first[-1] + 1, later + 1))
+
+            # How far the second attempt runs. Matching line against line to
+            # find out does not work: the second attempt says the thing that
+            # the first one fumbled, so its later lines have no counterpart to
+            # match — and stopping there cut it short, which made the *first*
+            # attempt look more complete and picked it every time.
+            #
+            # It runs until it has re-covered as much script as the attempt it
+            # replaces, or until the speaker stops long enough to be starting
+            # something else.
+            target = sum(len(tokens(utterances[index].text)) for index in first)
+            covered = sum(len(tokens(utterances[index].text)) for index in second)
+            cursor = later + 1
+            while cursor < len(utterances) and covered < target * RUNAWAY:
+                if utterances[cursor].start - utterances[cursor - 1].end > RESET_PAUSE:
+                    break
+                second.append(cursor)
+                covered += len(tokens(utterances[cursor].text))
+                cursor += 1
+
+            found.append(
+                Retake(
+                    first=_passage(first, utterances),
+                    second=_passage(second, utterances),
+                    detail=(
+                        f"{len(first)} enunciati ridetti in {len(second)}, "
+                        f"a partire da «{other.text[:60]}»"
+                    ),
+                )
+            )
+            # Only the attempt being replaced is spoken for. The replacement
+            # is left free to be the *first* of the next pair, because three
+            # goes at the same line is ordinary — «e poi in ogni caso non
+            # devi…», «e poi in ogni caso non è proprio un salto nel vuoto»,
+            # «e in ogni caso non è proprio una scommessa nel vuoto» — and a
+            # rule that pairs them off two at a time leaves the middle one
+            # standing in the edit.
+            spoken_for.update(first)
+            break
+
+    return found
+
+
+def score_passages(
+    retake: Retake, utterances: list[Utterance], words: list[Word]
+) -> tuple[float, float]:
+    """Score the two attempts against each other — on evidence, never position.
+
+    Deliberately not `score_take` averaged. That score carries a *recency* term,
+    which over a passage reduces to "the later one wins". This project knows
+    that rule to be false: in the reference footage the editor kept the first
+    delivery of one passage and the second of another, and a version of this
+    built on the take score chose backwards on both.
+
+    Four things tell two attempts apart, and none of them knows which came
+    first. A take that worked is *dense* — the speaker talks for most of the
+    time it occupies — and comes out in *whole* sentences rather than in a
+    «base», an «o», a line started three times. It is *fluent*. And it *reaches*
+    further into the script: an attempt abandoned after four words can be
+    flawless and still be the one to drop, which is the case the other three
+    measures get wrong on their own.
+    """
+    left = _passage_score(retake.first, retake.second, utterances, words)
+    right = _passage_score(retake.second, retake.first, utterances, words)
+    return left, right
+
+
+def _passage_score(
+    passage: Passage, other: Passage, utterances: list[Utterance], words: list[Word]
+) -> float:
+    members = [utterances[index] for index in passage.utterances]
+    span = max(passage.end - passage.start, 1e-6)
+
+    #: Of the time the attempt occupies, how much is speech rather than air.
+    flow = min(1.0, sum(item.duration for item in members) / span)
+    #: How much of it broke into pieces too short to be a sentence.
+    whole = 1.0 - sum(1 for item in members if len(tokens(item.text)) < FRAGMENT) / len(members)
+    fluency = sum(
+        score_take(item, words, members, position).fluency
+        for position, item in enumerate(members)
+    ) / len(members)
+    said = [item for item in members if len(tokens(item.text)) >= FRAGMENT]
+    last = said[-1].text.strip() if said else ""
+    complete = 0.0 if TRAILS_OFF.search(last) else 1.0 if SENTENCE_END.search(last) else 0.35
+
+    mine = sum(len(tokens(item.text)) for item in members)
+    theirs = sum(len(tokens(utterances[index].text)) for index in other.utterances)
+    reach = mine / max(mine, theirs, 1)
+
+    return 0.28 * whole + 0.24 * flow + 0.16 * fluency + 0.12 * complete + 0.20 * reach
 
 
 # --------------------------------------------------------------------- scoring

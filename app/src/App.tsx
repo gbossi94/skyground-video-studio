@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, type ProjectSummary } from "./api";
 import { Preview, type PreviewHandle } from "./components/Preview";
-import { Questions } from "./components/Questions";
+import { ENGINE, Questions, reviewQueue } from "./components/Questions";
 import { Timeline, formatTime } from "./components/Timeline";
 import type { CutPlan, CutState, Option, Question, Transcript } from "./types";
 
@@ -56,8 +56,8 @@ export default function App() {
   // is rebuilt on every answer, so the old object is stale immediately.
   useEffect(() => {
     if (!cut?.plan) return setSelected(null);
-    const open = cut.plan.questions.filter((question) => !question.resolved);
-    setSelected((current) => open.find((q) => q.id === current?.id) ?? open[0] ?? null);
+    const queue = reviewQueue(cut.plan.questions);
+    setSelected((current) => queue.find((q) => q.id === current?.id) ?? queue[0] ?? null);
   }, [cut]);
 
   if (error) return <Empty title="Non riesco a mostrare il montaggio" detail={error} />;
@@ -226,14 +226,22 @@ export default function App() {
 function Status({ plan }: { plan: CutPlan }) {
   const removed = Math.round(plan.stats.removedShare * 100);
   const tone = plan.status === "ready" ? "ok" : plan.status === "applied" ? "done" : "draft";
+  // "Pronto" on its own would hide the judgement calls the engine made to get
+  // there. Say how many, so the number is an invitation to look at them.
+  const byEngine = plan.questions.filter((question) => question.answeredBy === ENGINE).length;
+  const state =
+    plan.stats.openQuestions > 0
+      ? `${plan.stats.openQuestions} da decidere`
+      : byEngine > 0
+        ? `pronto · ${byEngine} decise dal motore`
+        : "pronto";
   return (
     <div className={`status ${tone}`}>
       <b>
         {formatTime(plan.stats.sourceDuration)} → {formatTime(plan.stats.outputDuration)}
       </b>
       <span>
-        −{removed}% · {plan.stats.segments} segmenti ·{" "}
-        {plan.stats.openQuestions > 0 ? `${plan.stats.openQuestions} da decidere` : "pronto"}
+        −{removed}% · {plan.stats.segments} segmenti · {state}
       </span>
     </div>
   );

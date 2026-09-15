@@ -40,6 +40,12 @@ from skyground.analysis.models import (
 )
 
 
+#: Chi ha preso una decisione, quando non è stata una persona. Resta scritto
+#: nel piano accanto alla risposta, così una scelta del motore si distingue a
+#: colpo d'occhio da una fatta da qualcuno — e si cambia con un clic.
+ENGINE = "motore"
+
+
 @dataclass(frozen=True)
 class CutPolicy:
     """Every number the engine is allowed to have an opinion about."""
@@ -59,10 +65,25 @@ class CutPolicy:
     certain_similarity: float = 0.60
     #: …and this similar are worth asking about.
     suspect_similarity: float = 0.30
-    #: Below this score margin the engine refuses to pick a take on its own.
+    #: Below this score margin the engine is unsure which take is better.
     decide_margin: float = 0.22
-    #: A mid-sentence pause longer than this may be deliberate: ask.
+    #: A mid-sentence pause longer than this may be deliberate.
     rhetorical_pause: float = 1.20
+    #: Whether an uncertain call stops the edit until a person makes it.
+    #:
+    #: False, by default, and that default is a change of mind. The first design
+    #: turned every uncertainty into a question and would not apply a plan until
+    #: all of them were answered — thirty-five, on six minutes of footage. That
+    #: is homework, not a tool, and it is not what "the cut must be right" asked
+    #: for.
+    #:
+    #: So the engine decides, and every decision stays in the plan with its
+    #: reason, marked as its own: visible, reviewable, and changeable in one
+    #: click. What makes this defensible rather than reckless is that the
+    #: recommendations are now measured against an approved edit — 87% of it
+    #: kept, 85% of the proposal used — where before nobody knew what they were
+    #: worth. Set it to True to get the old behaviour back.
+    ask_when_unsure: bool = False
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -114,12 +135,55 @@ def plan_cut(
     utterances = takes.build_utterances(words, gap=policy.utterance_gap)
     plan.utterances = utterances
 
+    dropped: dict[int, str] = {}  # utterance index -> why
+
+    # ------------------------------------------------------ repeated passages
+    # Before anything else, because a passage said twice contains pairs of lines
+    # that also look like retakes of each other, and deciding those one at a
+    # time leaves most of the discarded attempt standing.
+    spoken_for: set[int] = set()
+    for retake in takes.find_retaken_passages(
+        utterances, threshold=policy.certain_similarity, lookahead=4
+    ):
+        if all(index in dropped for index in retake.first.utterances) or all(
+            index in dropped for index in retake.second.utterances
+        ):
+            continue  # an earlier pair already settled one of these two
+        question_id = _passage_question_id(retake)
+        answer = decisions.get(question_id)
+        first_score, second_score = takes.score_passages(retake, utterances, words)
+        keep_first = first_score >= second_score
+        question = _passage_question(question_id, retake, first_score, second_score, keep_first)
+
+        if answer is None and policy.ask_when_unsure and abs(first_score - second_score) < policy.decide_margin:
+            plan.questions.append(question)
+            spoken_for.update(retake.first.utterances)
+            spoken_for.update(retake.second.utterances)
+            continue
+        if answer is None:
+            answer = "first" if keep_first else "second"
+            question.answered_by = ENGINE
+        question.answer = answer
+        plan.questions.append(question)
+        spoken_for.update(retake.first.utterances)
+        spoken_for.update(retake.second.utterances)
+        if answer == "keep-both":
+            continue
+        losing = retake.second if answer == "first" else retake.first
+        which = "seconda" if answer == "first" else "prima"
+        for index in losing.utterances:
+            dropped.setdefault(index, f"{which} ripresa dello stesso passaggio")
+        plan.passages.append(passage_as_dict(retake, answer))
+
     groups = takes.group_takes(
         utterances, threshold=policy.certain_similarity, lookahead=4
     )
+    # A passage already decided is not re-argued line by line.
+    groups = [
+        group for group in groups
+        if not any(index in spoken_for for index in group.utterances)
+    ]
     plan.takes = groups
-
-    dropped: dict[int, str] = {}  # utterance index -> why
 
     # ------------------------------------------------------- repeated attempts
     for group in groups:
@@ -160,10 +224,17 @@ def plan_cut(
                     dropped[index] = f"ripetizione superata (margine {margin:.2f})"
             continue
 
-        # Too close to call: keep every attempt and ask.
-        plan.questions.append(
-            _take_question(question_id, group.utterances, utterances, scores, best, margin)
+        # Too close to call by the margin alone. Decide anyway, and say so.
+        question = _take_question(
+            question_id, group.utterances, utterances, scores, best, margin
         )
+        if not policy.ask_when_unsure:
+            question.answer = f"utterance:{best}"
+            question.answered_by = ENGINE
+            for index in group.utterances:
+                if index != best:
+                    dropped[index] = f"ripetizione, scelta del motore (margine {margin:.2f})"
+        plan.questions.append(question)
 
     # ------------------------------------------------ suspected reformulations
     for suspect in suspects or []:
@@ -175,6 +246,13 @@ def plan_cut(
         question = _suspect_question(
             question_id, first, second, utterances, suspect.get("why", ""), words
         )
+        if answer is None and not policy.ask_when_unsure:
+            # Decide it: the recommended option when there is one, and keeping
+            # both when the two are too close to separate — the safe way to be
+            # wrong, since nothing is lost by it.
+            recommended = next((o for o in question.options if o.recommended), None)
+            answer = recommended.id if recommended else "keep-both"
+            question.answered_by = ENGINE
         question.answer = answer
         plan.questions.append(question)
         if answer is None or answer == "keep-both":
@@ -182,7 +260,10 @@ def plan_cut(
         chosen = _utterance_from_answer(answer, [first, second])
         for index in (first, second):
             if index != chosen:
-                dropped[index] = "scelta dell'editor"
+                dropped[index] = (
+                    "scelta del motore" if question.answered_by == ENGINE
+                    else "scelta dell'editor"
+                )
 
     for index, reason in dropped.items():
         utterances[index].kept = False
@@ -204,6 +285,9 @@ def plan_cut(
             plan.restarts.append(restart_as_dict(restart, words))
             continue
         question = _restart_question(question_id, restart, words)
+        if answer is None and not policy.ask_when_unsure:
+            answer = "cut"
+            question.answered_by = ENGINE
         question.answer = answer
         plan.questions.append(question)
         if answer == "cut":
@@ -224,6 +308,82 @@ def plan_cut(
 def _drop_words(kept: list[bool], restart: takes.Restart) -> None:
     for index in range(restart.first_word, restart.last_word + 1):
         kept[index] = False
+
+
+def _passage_question_id(retake: takes.Retake) -> str:
+    return (
+        "passage:"
+        + "-".join(str(index) for index in retake.first.utterances)
+        + "|"
+        + "-".join(str(index) for index in retake.second.utterances)
+    )
+
+
+def passage_as_dict(retake: takes.Retake, answer: str) -> dict:
+    return {
+        "kept": answer,
+        "detail": retake.detail,
+        "first": {
+            "start": round(retake.first.start, 3),
+            "end": round(retake.first.end, 3),
+            "utterances": list(retake.first.utterances),
+        },
+        "second": {
+            "start": round(retake.second.start, 3),
+            "end": round(retake.second.end, 3),
+            "utterances": list(retake.second.utterances),
+        },
+    }
+
+
+def _passage_question(
+    question_id: str,
+    retake: takes.Retake,
+    first_score: float,
+    second_score: float,
+    keep_first: bool,
+) -> Question:
+    return Question(
+        id=question_id,
+        kind=ASK_TAKE_CHOICE,
+        at=retake.first.start,
+        prompt="Quale delle due riprese di questo passaggio vuoi tenere?",
+        context=(
+            f"{retake.detail}. È lo stesso pezzo di copione detto due volte: "
+            "va tenuto per intero uno dei due, non un pezzo per uno."
+        ),
+        options=[
+            Option(
+                id="first",
+                label=f"La prima: {retake.first.text[:90]}",
+                detail=(
+                    f"{retake.first.start:.2f}–{retake.first.end:.2f}s · "
+                    f"{retake.first.end - retake.first.start:.1f}s · "
+                    f"punteggio {first_score:.2f}"
+                ),
+                recommended=keep_first,
+                start=retake.first.start,
+                end=retake.first.end,
+            ),
+            Option(
+                id="second",
+                label=f"La seconda: {retake.second.text[:90]}",
+                detail=(
+                    f"{retake.second.start:.2f}–{retake.second.end:.2f}s · "
+                    f"{retake.second.end - retake.second.start:.1f}s · "
+                    f"punteggio {second_score:.2f}"
+                ),
+                recommended=not keep_first,
+                start=retake.second.start,
+                end=retake.second.end,
+            ),
+            Option(
+                id="keep-both",
+                label="Tenerle entrambe",
+                detail="Non è una ripetizione: dicono cose diverse.",
+            ),
+        ],
+    )
 
 
 def restart_as_dict(restart: takes.Restart, words: list) -> dict:
@@ -318,9 +478,12 @@ def _build_segments(
                 # with the answer when somebody has. A decision that disappears
                 # from the plan cannot be reviewed or taken back.
                 question.answer = decisions.get(question.id)
+                if question.answer is None and not policy.ask_when_unsure:
+                    question.answer = "cut"
+                    question.answered_by = ENGINE
                 plan.questions.append(question)
                 if question.answer == "keep":
-                    continue  # the editor called it deliberate: leave it whole
+                    continue  # called deliberate: leave the pause whole
             pieces.append((piece_start, index))
             piece_start = index + 1
         pieces.append((piece_start, last))
@@ -497,7 +660,7 @@ def _take_question(
         prompt="Quale di queste take vuoi tenere?",
         context=(
             f"Sembrano {len(indices)} tentativi della stessa battuta, e i punteggi sono vicini "
-            f"(margine {margin:.2f}): la scelta cambia il senso, quindi non la faccio io."
+            f"(margine {margin:.2f}): la scelta cambia il senso, quindi vale la pena riguardarla."
         ),
         options=options,
     )

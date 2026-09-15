@@ -15,7 +15,7 @@ These tests pin both, and the harness that measures them.
 from __future__ import annotations
 
 from skyground.analysis import align, evaluation, takes
-from skyground.analysis.cut import plan_cut
+from skyground.analysis.cut import CutPolicy, plan_cut
 from skyground.analysis.models import Analysis, Silence, Word
 
 
@@ -111,14 +111,29 @@ def test_a_line_repeated_much_later_is_not_a_restart():
     assert takes.find_abandoned_starts(utterances) == []
 
 
-def test_an_uncertain_restart_is_asked_about_and_changes_nothing_alone():
-    """Two words repeated is as likely to be emphasis as a stumble, so it is a
-    question — and until it is answered the material stays in."""
+def test_an_uncertain_restart_is_decided_by_the_engine_and_stays_on_the_record():
+    """Two words repeated is as likely to be emphasis as a stumble. The engine
+    no longer stops for it — it decides, and writes down that it did."""
     script = "sei bloccata sei bloccata".split()
     words = words_from([(w, i * 0.4, i * 0.4 + 0.3) for i, w in enumerate(script)])
     analysis = Analysis(source="raw.mov", duration=3.0, words=words)
 
     plan = plan_cut(analysis)
+
+    asked = [q for q in plan.questions if q.id.startswith("restart:")]
+    assert len(asked) == 1
+    assert asked[0].resolved is True
+    assert asked[0].answered_by == "motore"
+    assert plan.restarts, "la ripartenza non è stata tolta"
+
+
+def test_an_uncertain_restart_still_waits_when_asked_to():
+    """The blocking behaviour is still there for whoever wants it."""
+    script = "sei bloccata sei bloccata".split()
+    words = words_from([(w, i * 0.4, i * 0.4 + 0.3) for i, w in enumerate(script)])
+    analysis = Analysis(source="raw.mov", duration=3.0, words=words)
+
+    plan = plan_cut(analysis, CutPolicy(ask_when_unsure=True))
 
     asked = [q for q in plan.questions if q.id.startswith("restart:")]
     assert len(asked) == 1
