@@ -393,3 +393,90 @@ def test_keeping_both_takes_is_also_a_decision_on_the_record(restarted_sentence)
     kept = next(q for q in rebuilt.questions if q.id == question.id)
     assert kept.answer == "keep-both"
     assert invariants.check(rebuilt, restarted_sentence) == []
+
+
+# --------------------------------------- what the recommendation is worth
+
+
+def test_a_take_that_trails_off_is_never_the_recommended_one():
+    """A transcriber writes «…» exactly where the speaker broke off. Reading it
+    as a finished sentence inverted the signal: the engine recommended the
+    abandoned attempt, and following its advice cost a quarter of the approved
+    edit on the reference footage."""
+    from skyground.analysis.takes import build_utterances, score_take
+
+    words = [
+        Word(t=i * 0.4, end=i * 0.4 + 0.3, s=text, p=0.95)
+        for i, text in enumerate("e poi in ogni caso non devi…".split())
+    ] + [
+        Word(t=4.0 + i * 0.4, end=4.0 + i * 0.4 + 0.3, s=text, p=0.95)
+        for i, text in enumerate("e poi in ogni caso non è proprio un salto nel vuoto.".split())
+    ]
+    utterances = build_utterances(words, gap=0.55)
+    assert len(utterances) == 2
+
+    abandoned, delivered = (
+        score_take(utterances[0], words, utterances, 0),
+        score_take(utterances[1], words, utterances, 1),
+    )
+    assert abandoned.complete == 0.0
+    assert delivered.total > abandoned.total
+
+
+def test_a_tidy_fragment_does_not_beat_the_sentence_it_came_from():
+    """«ancora alzando i prezzi.» ends in a full stop and says almost nothing.
+    It used to out-score the take that delivered the thought."""
+    from skyground.analysis.takes import build_utterances, score_take
+
+    long_take = "E magari questo vuol dire rinunciare a un po' di estetica di base o alzare i prezzi"
+    words = [
+        Word(t=i * 0.4, end=i * 0.4 + 0.3, s=text, p=0.95)
+        for i, text in enumerate(long_take.split())
+    ] + [
+        Word(t=20.0 + i * 0.4, end=20.0 + i * 0.4 + 0.3, s=text, p=0.95)
+        for i, text in enumerate("ancora alzando i prezzi.".split())
+    ]
+    utterances = build_utterances(words, gap=0.55)
+    full, fragment = (
+        score_take(utterances[0], words, utterances, 0),
+        score_take(utterances[1], words, utterances, 1),
+    )
+    assert full.total > fragment.total
+
+
+def test_a_suspected_reformulation_is_not_decided_by_position(restarted_sentence):
+    """The recommendation on an adviser's pair used to be «the second one»,
+    always — a rule this codebase documents as wrong, since on the reference
+    footage the editor kept the first attempt of the opening line."""
+    plan = plan_cut(restarted_sentence, suspects=[{"a": 0, "b": 1, "why": "prova"}])
+    question = next(q for q in plan.questions if q.id == "take:0-1")
+
+    marked = [option for option in question.options if option.recommended]
+    assert len(marked) <= 1
+    if marked:
+        # Whatever it recommends, it is not "the later one because it is later".
+        assert marked[0].id in {"utterance:0", "utterance:1"}
+        scored = {option.id: option for option in question.options}
+        assert scored["utterance:0"].start is not None
+        assert scored["utterance:1"].start is not None
+
+
+def test_two_takes_too_close_to_separate_get_no_recommendation():
+    """Marking one anyway invites a person to click through a choice the engine
+    cannot actually make. Two different wordings of the same thought: the
+    adviser pairs them, the score cannot separate them."""
+    first = "il fatturato resta fermo ogni singolo mese dell anno"
+    second = "i ricavi non salgono mai in nessun mese dell anno"
+    words = [
+        Word(t=i * 0.4, end=i * 0.4 + 0.3, s=text, p=0.95)
+        for i, text in enumerate(first.split())
+    ] + [
+        Word(t=10.0 + i * 0.4, end=10.0 + i * 0.4 + 0.3, s=text, p=0.95)
+        for i, text in enumerate(second.split())
+    ]
+    analysis = Analysis(source="raw.mov", duration=16.0, words=words)
+
+    plan = plan_cut(analysis, suspects=[{"a": 0, "b": 1, "why": "stessa idea"}])
+
+    question = next(q for q in plan.questions if q.id == "take:0-1")
+    assert [o for o in question.options if o.recommended] == []

@@ -173,7 +173,7 @@ def plan_cut(
             continue
         answer = decisions.get(question_id)
         question = _suspect_question(
-            question_id, first, second, utterances, suspect.get("why", "")
+            question_id, first, second, utterances, suspect.get("why", ""), words
         )
         question.answer = answer
         plan.questions.append(question)
@@ -499,14 +499,34 @@ def _take_question(
 
 
 def _suspect_question(
-    question_id: str, first: int, second: int, utterances: list[Utterance], why: str
+    question_id: str,
+    first: int,
+    second: int,
+    utterances: list[Utterance],
+    why: str,
+    words: list | None = None,
 ) -> Question:
+    # The recommendation used to be "the second one, always" — a rule this
+    # project knows to be wrong, and says so in `takes`: on the reference
+    # footage the editor kept the *first* attempt of the opening line. Blindly
+    # preferring the later take cost six seconds of approved material on one
+    # question alone. So these are scored like any other pair, and when the two
+    # are too close to separate, neither is marked.
+    pair = [utterances[first], utterances[second]]
+    if words:
+        scores = [takes.score_take(item, words, pair, index) for index, item in enumerate(pair)]
+        better = 1 if scores[1].total > scores[0].total else 0
+        margin = abs(scores[1].total - scores[0].total)
+    else:  # pragma: no cover - only when a caller has no transcript to hand
+        better, margin = 1, 0.0
+    confident = margin >= 0.08
+
     options = [
         Option(
             id=f"utterance:{second}",
             label=f"Tenere la seconda: {utterances[second].text[:80]}",
             detail=f"{utterances[second].start:.2f}–{utterances[second].end:.2f}s",
-            recommended=True,
+            recommended=confident and better == 1,
             start=utterances[second].start,
             end=utterances[second].end,
         ),
@@ -514,6 +534,7 @@ def _suspect_question(
             id=f"utterance:{first}",
             label=f"Tenere la prima: {utterances[first].text[:80]}",
             detail=f"{utterances[first].start:.2f}–{utterances[first].end:.2f}s",
+            recommended=confident and better == 0,
             start=utterances[first].start,
             end=utterances[first].end,
         ),

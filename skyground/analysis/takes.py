@@ -30,7 +30,20 @@ FILLERS = frozenset(
 )
 
 #: A take that trails off without one of these rarely works as a final line.
-SENTENCE_END = re.compile(r"[.!?…]$")
+#:
+#: Note what is *not* here: the ellipsis. A transcriber writes «…» exactly where
+#: the speaker broke off — «e poi in ogni caso non devi…» — so reading it as a
+#: finished sentence inverts the signal. It did: the engine was recommending the
+#: abandoned attempt over the one that was actually delivered, and answering as
+#: recommended lost a quarter of the approved edit.
+SENTENCE_END = re.compile(r"[.!?]$")
+
+#: …and the ellipsis is positive evidence of the opposite.
+TRAILS_OFF = re.compile(r"(…|\.\.\.)$")
+
+#: Below this fraction of the longest attempt's words, a take has said too
+#: little of the line to count as a finished one.
+PARTIAL_TAKE = 0.6
 
 WORD_SPLIT = re.compile(r"[^\w']+", re.UNICODE)
 
@@ -308,29 +321,48 @@ def score_take(
     chunk = words[utterance.first_word : utterance.last_word + 1]
     count = max(1, len(chunk))
 
-    complete = 1.0 if SENTENCE_END.search(utterance.text.strip()) else 0.35
+    said = utterance.text.strip()
+    if TRAILS_OFF.search(said):
+        complete = 0.0  # broke off mid-thought: whatever follows is the real take
+    elif SENTENCE_END.search(said):
+        complete = 1.0
+    else:
+        complete = 0.35
 
     filler_count = sum(1 for word in chunk if normalize(word.s).strip(".,!?'") in FILLERS)
     fluency = max(0.0, 1.0 - (filler_count / count) * 4.0)
 
     confidence = sum(word.p for word in chunk) / count
 
-    # A take much shorter than its siblings is usually an aborted start; one much
-    # longer is usually the speaker rambling before finding the line.
+    # A take much shorter than its siblings said less of the line, which is a
+    # fact about the attempt rather than a preference about it. The penalty used
+    # to be gentle — a third of the words still scored 0.58 — and a tidy fragment
+    # ending in a full stop could out-score the attempt that actually delivered
+    # the thought. «ancora alzando i prezzi.» beat the sentence it was the tail
+    # of, and six seconds of the approved edit went with it.
     longest = max((sibling.word_count for sibling in siblings), default=utterance.word_count)
-    ratio = utterance.word_count / max(1, longest)
-    length = 1.0 - abs(1.0 - ratio) * 0.6
+    length = utterance.word_count / max(1, longest)
+
+    # A take that said a fraction of the line cannot claim to have finished it,
+    # whatever punctuation it ends on. Without this, «ancora alzando i prezzi.»
+    # — four words and a full stop — outscored the sentence it was the tail of.
+    if length < PARTIAL_TAKE:
+        complete = min(complete, 0.35)
 
     # Later attempts are somewhat more likely to be the good one — but only
     # somewhat, because the reference footage shows the opposite happening.
     recency = position / max(1, len(siblings) - 1) if len(siblings) > 1 else 1.0
 
+    # How much of the line a take delivered carries real weight now. Position
+    # carries almost none: this codebase's own reference footage has the editor
+    # keeping the first attempt of one line and the second of another, so
+    # "later is better" is a coin toss dressed up as a rule.
     total = (
-        0.30 * complete
-        + 0.25 * fluency
-        + 0.20 * confidence
-        + 0.15 * length
-        + 0.10 * recency
+        0.28 * complete
+        + 0.22 * fluency
+        + 0.18 * confidence
+        + 0.27 * length
+        + 0.05 * recency
     )
     return TakeScore(total, complete, fluency, confidence, length, recency)
 
