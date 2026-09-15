@@ -11,6 +11,10 @@ faster-whisper==1.1.1
 # altra strada; in un'immagine pulita no, e il worker muore all'import. Va
 # dichiarato qui, dove l'immagine lo legge.
 requests==2.32.3
+# Il consulente semantico: legge la trascrizione e segnala le riformulazioni che
+# il confronto fra parole non può vedere. Resta spento senza una chiave, ma se
+# il pacchetto non c'è il worker muore in coda invece di dirlo all'avvio.
+anthropic==1.5.0
 boto3==1.35.90
 fastapi==0.115.12
 psycopg[binary]==3.2.3

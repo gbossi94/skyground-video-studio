@@ -186,3 +186,20 @@ def test_an_unknown_codec_falls_back_instead_of_failing_the_job():
     from skyground.worker.runner import PROXY_FORMATS
 
     assert PROXY_FORMATS.get(load_settings({"SKYGROUND_PROXY_CODEC": "boh"}).proxy_codec) is None
+
+
+def test_the_adviser_package_is_actually_installed():
+    """Same lesson as the transcriber: a provider that cannot be imported turns
+    into a job that dies in the queue twenty minutes later, not into an error at
+    startup. The image is verified at build time too."""
+    import anthropic  # noqa: F401
+
+    from skyground.analysis.adviser import ClaudeAdviser
+
+    assert ClaudeAdviser("chiave-finta").model
+
+
+def test_without_a_key_the_adviser_stays_off():
+    from skyground.analysis.adviser import NullAdviser, build_adviser
+
+    assert isinstance(build_adviser(load_settings({})), NullAdviser)
