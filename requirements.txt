@@ -1,6 +1,11 @@
 # Runtime dependencies of the web application and the worker.
 # The editorial CLI (validate, sync, build-source, render) needs none of these.
 alembic==1.14.0
+# Speech to text inside the worker, so an instance can listen to its own footage
+# without anybody buying a transcription key. Heavy — it brings CTranslate2 and
+# the model weights — which is why the service runs on a plan with the memory
+# for it. `SKYGROUND_TRANSCRIPTION_PROVIDER=deepgram` replaces it with an API.
+faster-whisper==1.1.1
 boto3==1.35.90
 fastapi==0.115.12
 psycopg[binary]==3.2.3

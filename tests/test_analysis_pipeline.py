@@ -110,6 +110,27 @@ def test_the_backend_follows_the_configuration(tmp_path):
         build_transcriber(load_settings({"SKYGROUND_TRANSCRIPTION_PROVIDER": "inventato"}))
 
 
+def test_the_default_transcriber_is_actually_installed():
+    """The default provider needs no key, which is only true if the library it
+    needs ships with the application. It did not, and a deployment discovered
+    that only when the first job failed in the queue."""
+    import faster_whisper  # noqa: F401
+
+    from skyground.analysis.transcription import LocalWhisperTranscriber
+
+    assert isinstance(build_transcriber(load_settings({})), LocalWhisperTranscriber)
+
+
+def test_the_model_is_cached_where_the_configuration_says(tmp_path):
+    """On a container the library's own cache is discarded at every deploy, so
+    the weights have to be able to live on the mounted disk instead."""
+    transcriber = build_transcriber(
+        load_settings({"SKYGROUND_MODEL_CACHE_ROOT": str(tmp_path / "models")})
+    )
+    assert transcriber.cache_root == tmp_path / "models"
+    assert build_transcriber(load_settings({})).cache_root is None
+
+
 # --------------------------------------------------- against the real footage
 
 #: Point this at a transcript of the reference take to run the check below.

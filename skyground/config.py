@@ -102,6 +102,11 @@ class Settings:
     transcription_provider: str = "local"
     transcription_model: str = "small"
     transcription_api_key: str = ""
+    #: Where the speech model's weights are cached. Empty means "wherever the
+    #: library puts them", which is right on a laptop and wrong on a container
+    #: whose filesystem is discarded at every deploy: there it belongs on the
+    #: mounted disk, next to the media.
+    model_cache_root: str = ""
     #: Codec of the preview proxy. H.264 is what every shipping browser
     #: decodes, in hardware; VP9 exists for builds without the licensed
     #: codecs, such as the Chromium used in automated checks.
@@ -217,6 +222,7 @@ def load_settings(environ: dict | None = None) -> Settings:
         transcription_provider=_env("SKYGROUND_TRANSCRIPTION_PROVIDER", "local") or "local",
         transcription_model=_env("SKYGROUND_TRANSCRIPTION_MODEL", "small") or "small",
         transcription_api_key=_env("SKYGROUND_TRANSCRIPTION_API_KEY", "") or "",
+        model_cache_root=_env("SKYGROUND_MODEL_CACHE_ROOT", "") or "",
         proxy_codec=(_env("SKYGROUND_PROXY_CODEC", "h264") or "h264").strip().lower(),
         adviser_provider=_env("SKYGROUND_ADVISER_PROVIDER", "none") or "none",
         adviser_model=_env("SKYGROUND_ADVISER_MODEL", "claude-opus-5") or "claude-opus-5",

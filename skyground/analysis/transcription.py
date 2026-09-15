@@ -51,9 +51,18 @@ class LocalWhisperTranscriber:
 
     name = "whisper-local"
 
-    def __init__(self, model: str = "small", compute_type: str = "int8"):
+    def __init__(
+        self,
+        model: str = "small",
+        compute_type: str = "int8",
+        cache_root: pathlib.Path | str | None = None,
+    ):
         self.model_name = model
         self.compute_type = compute_type
+        #: Where the weights are kept. On a deployment this belongs on the
+        #: mounted disk: the container's own filesystem is thrown away at every
+        #: deploy, and half a gigabyte of model with it.
+        self.cache_root = pathlib.Path(cache_root) if cache_root else None
         self._model = None
 
     def _load(self):
@@ -65,8 +74,13 @@ class LocalWhisperTranscriber:
                     "trascrizione locale non disponibile: installa faster-whisper "
                     "oppure configura un provider via API"
                 ) from error
+            if self.cache_root is not None:
+                self.cache_root.mkdir(parents=True, exist_ok=True)
             self._model = WhisperModel(
-                self.model_name, device="cpu", compute_type=self.compute_type
+                self.model_name,
+                device="cpu",
+                compute_type=self.compute_type,
+                download_root=str(self.cache_root) if self.cache_root else None,
             )
         return self._model
 
@@ -154,7 +168,10 @@ def build_transcriber(settings=None) -> Transcriber:
             settings.transcription_api_key or "", model=settings.transcription_model
         )
     if provider == "local":
-        return LocalWhisperTranscriber(model=settings.transcription_model or "small")
+        return LocalWhisperTranscriber(
+            model=settings.transcription_model or "small",
+            cache_root=settings.model_cache_root or None,
+        )
     if provider.startswith("fixture:"):
         return FixtureTranscriber(provider.split(":", 1)[1])
     raise ConfigurationError(f"provider di trascrizione sconosciuto: {provider}")

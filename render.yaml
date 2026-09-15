@@ -36,6 +36,11 @@ services:
     envVars:
       - key: SKYGROUND_ENV
         value: production
+      # I pesi del modello di trascrizione stanno sul disco montato: il
+      # filesystem del container viene buttato a ogni deploy, e con lui mezzo
+      # giga di modello da riscaricare.
+      - key: SKYGROUND_MODEL_CACHE_ROOT
+        value: /var/skyground/models
       - key: SKYGROUND_DATABASE_URL
         fromDatabase:
           name: skyground-db
