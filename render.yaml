@@ -1,98 +1,69 @@
-# Render blueprint for Skyground Video Studio.
+# Render blueprint — un servizio solo, con disco.
 #
-# Nothing here contains a credential. Every secret is declared with
-# `sync: false`, which means Render asks for it once in the dashboard and never
-# reads it from Git. Applying this blueprint creates the services; it does not
-# create the Cloudflare R2 bucket, which is set up separately and whose four
-# values are listed in docs/DEPLOY.md.
+# Questa è la forma che si mette online senza dipendere da nessun altro
+# fornitore: API e worker nello stesso container, i media su un disco
+# persistente, PostgreSQL gestito da Render. Nessuna chiave da procurarsi,
+# nessun bucket da creare.
+#
+# Il motivo per cui web e worker stanno insieme è concreto: un disco Render si
+# monta su un servizio solo, quindi due servizi separati non possono condividere
+# i media e servirebbe uno storage a oggetti. Quando la coda di rendering
+# meriterà una macchina sua, si passa a deploy/render-split.yaml, che separa i
+# due e mette i media su Cloudflare R2.
 
 databases:
   - name: skyground-db
-    databaseName: skyground
-    user: skyground
+    databaseName: skyground_db
     plan: basic-256mb
-    postgresMajorVersion: "16"
-
-envVarGroups:
-  # Shared by the web service and the worker so both sign and read the same way.
-  - name: skyground-shared
-    envVars:
-      - key: SKYGROUND_ENV
-        value: production
-      - key: SKYGROUND_STORAGE_BACKEND
-        value: s3
-      - key: SKYGROUND_AUTH_MODE
-        value: password
-      - key: SKYGROUND_COOKIE_SECURE
-        value: "true"
-      # Signs session cookies and local media links. Generated once by Render.
-      - key: SKYGROUND_SECRET_KEY
-        generateValue: true
-      # Cloudflare R2. Entered in the dashboard, never versioned.
-      - key: SKYGROUND_S3_ENDPOINT
-        sync: false
-      - key: SKYGROUND_S3_BUCKET
-        sync: false
-      - key: SKYGROUND_S3_REGION
-        value: auto
-      # Speech to text for the automatic cut. Leave the provider unset to run
-      # Whisper inside the worker instead of paying per minute.
-      - key: SKYGROUND_TRANSCRIPTION_PROVIDER
-        value: deepgram
-      - key: SKYGROUND_TRANSCRIPTION_API_KEY
-        sync: false
-      # Optional: spots reformulations the word comparison cannot see. It only
-      # ever raises questions, so the pipeline works without it.
-      - key: SKYGROUND_ADVISER_PROVIDER
-        value: none
-      - key: SKYGROUND_ADVISER_API_KEY
-        sync: false
-      - key: SKYGROUND_S3_ACCESS_KEY_ID
-        sync: false
-      - key: SKYGROUND_S3_SECRET_ACCESS_KEY
-        sync: false
+    postgresMajorVersion: "18"
+    region: frankfurt
+    diskSizeGB: 1
 
 services:
   - type: web
     name: skyground-studio
     runtime: docker
-    dockerfilePath: ./Dockerfile
-    plan: starter
+    dockerfilePath: ./Dockerfile.combined
+    plan: standard # la trascrizione locale vuole memoria: starter non basta
     region: frankfurt
     healthCheckPath: /healthz
-    # Migrations run before the new version takes traffic.
-    preDeployCommand: python studio.py db upgrade
+    # Il disco tiene girato, proxy e render. 20 GB stanno su qualche ora di
+    # materiale: si alza senza perdere nulla, non si abbassa.
+    disk:
+      name: skyground-media
+      mountPath: /var/skyground
+      sizeGB: 20
     envVars:
-      - fromGroup: skyground-shared
+      - key: SKYGROUND_ENV
+        value: production
       - key: SKYGROUND_DATABASE_URL
         fromDatabase:
           name: skyground-db
           property: connectionString
-      - key: SKYGROUND_ALLOWED_ORIGINS
+      # Firma i cookie di sessione e i link ai media. Generata da Render.
+      - key: SKYGROUND_SECRET_KEY
+        generateValue: true
+      - key: SKYGROUND_AUTH_MODE
+        value: password
+      - key: SKYGROUND_COOKIE_SECURE
+        value: "true"
+      # I media stanno sul disco montato qui sopra: è ciò che rende vera la
+      # dichiarazione di durabilità, e senza il disco l'app rifiuta di partire.
+      - key: SKYGROUND_STORAGE_BACKEND
+        value: local
+      - key: SKYGROUND_STORAGE_ROOT
+        value: /var/skyground/storage
+      - key: SKYGROUND_STORAGE_DURABLE
+        value: "true"
+      # Trascrizione dentro il worker: nessuna chiave, nessun costo al minuto.
+      # Per passare a un'API, metti 'deepgram' e aggiungi la chiave.
+      - key: SKYGROUND_TRANSCRIPTION_PROVIDER
+        value: local
+      - key: SKYGROUND_TRANSCRIPTION_MODEL
+        value: small
+      # Adviser facoltativo: segnala le riformulazioni che il confronto
+      # lessicale non vede. Alza solo domande, quindi si può lasciare spento.
+      - key: SKYGROUND_ADVISER_PROVIDER
+        value: none
+      - key: SKYGROUND_ADVISER_API_KEY
         sync: false
-
-  - type: worker
-    name: skyground-worker
-    runtime: docker
-    dockerfilePath: ./Dockerfile.worker
-    plan: standard # rendering is CPU and memory bound
-    region: frankfurt
-    envVars:
-      - fromGroup: skyground-shared
-      - key: SKYGROUND_DATABASE_URL
-        fromDatabase:
-          name: skyground-db
-          property: connectionString
-      - key: SKYGROUND_WORKER_JOB_TIMEOUT_SECONDS
-        value: "3600"
-
-  # The queue. In this phase jobs are claimed from PostgreSQL with
-  # `FOR UPDATE SKIP LOCKED`, which is exactly-once and needs no broker, so this
-  # instance is provisioned but not yet used: phase 3 moves fan-out and progress
-  # events onto it. Remove it if you would rather add it later.
-  - type: keyvalue
-    name: skyground-queue
-    plan: free
-    region: frankfurt
-    maxmemoryPolicy: noeviction
-    ipAllowList: [] # reachable only from inside the Render network

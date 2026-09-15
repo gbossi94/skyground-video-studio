@@ -68,14 +68,6 @@ def test_production_refuses_the_open_authentication_mode():
     assert "password" in str(error.value)
 
 
-def test_production_refuses_local_disk_storage():
-    """A web instance has no durable disk: a render written there is lost."""
-    environment = dict(PRODUCTION, SKYGROUND_STORAGE_BACKEND="local")
-    with pytest.raises(ConfigurationError) as error:
-        load_settings(environment).check_deployable()
-    assert "non è durevole" in str(error.value)
-
-
 def test_production_refuses_insecure_cookies():
     environment = dict(PRODUCTION, SKYGROUND_COOKIE_SECURE="0")
     with pytest.raises(ConfigurationError):
@@ -113,3 +105,29 @@ def test_the_local_development_key_is_stable_but_never_used_in_production(tmp_pa
 
 def test_render_supplies_the_port():
     assert load_settings({"PORT": "10000"}).port == 10000
+
+
+def test_production_still_refuses_ephemeral_local_storage():
+    """A container filesystem without a volume loses every render on deploy."""
+    environment = dict(PRODUCTION, SKYGROUND_STORAGE_BACKEND="local")
+    with pytest.raises(ConfigurationError) as error:
+        load_settings(environment).check_deployable()
+    assert "durevole" in str(error.value)
+
+
+def test_a_declared_persistent_disk_is_accepted():
+    """One service with a mounted volume is a legitimate deployment; two
+    services are not, because a Render disk attaches to exactly one."""
+    environment = dict(
+        PRODUCTION,
+        SKYGROUND_STORAGE_BACKEND="local",
+        SKYGROUND_STORAGE_ROOT="/var/skyground",
+        SKYGROUND_STORAGE_DURABLE="true",
+    )
+    settings = load_settings(environment)
+    settings.check_deployable()
+    assert settings.storage_is_durable is True
+
+
+def test_durability_is_off_unless_asked_for():
+    assert load_settings({}).storage_is_durable is False

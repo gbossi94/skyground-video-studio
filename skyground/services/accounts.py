@@ -143,6 +143,36 @@ def revoke_all_sessions(session: Session, user: User) -> int:
     return count
 
 
+def is_empty(session: Session) -> bool:
+    """Whether the instance has no real account yet.
+
+    The local single-user identity does not count: it has no usable password and
+    exists only so that revisions made on a laptop have an author.
+    """
+    return (
+        session.scalar(
+            select(User).where(User.email != LOCAL_USER_EMAIL).limit(1)
+        )
+        is None
+    )
+
+
+def create_first_admin(
+    session: Session, email: str, password: str, *, name: str = ""
+) -> User:
+    """Claim a fresh instance.
+
+    Only possible while no account exists — which is what makes it safe to leave
+    the door open on a public URL: the first person through closes it behind
+    them, and everybody after is invited.
+    """
+    if not is_empty(session):
+        raise Conflict("questa istanza ha già un account: chiedi un invito")
+    user = create_user(session, email, password, name=name, is_admin=True)
+    audit.record(session, "instance.claim", actor=user, target=user.email)
+    return user
+
+
 def ensure_local_user(session: Session) -> User:
     """The identity used by single-user local mode.
 

@@ -214,3 +214,60 @@ def test_local_mode_needs_no_sign_in(local_client):
     """`studio.py serve` on a laptop must keep working without an account."""
     assert local_client.get("/api/projects").status_code == 200
     assert local_client.get("/api/auth/me").json()["user"]["email"] == "local@skyground.local"
+
+
+# ------------------------------------------------------- claiming an instance
+
+
+def test_a_fresh_instance_asks_to_be_claimed(client, session_factory):
+    """A studio deployed on a public URL has no account yet: somebody has to be
+    first, and the API says so plainly."""
+    assert client.get("/api/auth/setup").json()["required"] is True
+
+
+def test_the_first_account_gets_the_projects_in_the_checkout(client, workspace):
+    response = client.post(
+        "/api/auth/setup",
+        json={"email": "gabriele@skyground.online", "password": PASSWORD, "name": "Gabriele"},
+    )
+    assert response.status_code == 200
+    assert response.json()["user"]["isAdmin"] is True
+    assert PROJECT_ID in response.json()["projects"]
+    # Signed in straight away: no second trip through the login form.
+    assert client.get("/api/auth/me").json()["user"]["email"] == "gabriele@skyground.online"
+    assert [item["id"] for item in client.get("/api/projects").json()] == [PROJECT_ID]
+
+
+def test_the_door_closes_after_the_first_account(client):
+    client.post("/api/auth/setup", json={"email": "primo@skyground.online", "password": PASSWORD})
+    client.post("/api/auth/logout")
+
+    second = client.post(
+        "/api/auth/setup", json={"email": "intruso@example.com", "password": PASSWORD}
+    )
+    assert second.status_code == 409
+    assert "già un account" in second.json()["error"]
+    assert client.get("/api/auth/setup").json()["required"] is False
+
+
+def test_claiming_still_demands_a_real_password(client):
+    response = client.post(
+        "/api/auth/setup", json={"email": "gabriele@skyground.online", "password": "corta"}
+    )
+    assert response.status_code == 422
+    assert client.get("/api/auth/setup").json()["required"] is True
+
+
+def test_the_local_identity_does_not_count_as_an_account(client, session_factory):
+    """Otherwise a studio that ran locally once could never be claimed."""
+    with session_factory() as db:
+        accounts.ensure_local_user(db)
+        db.commit()
+    assert client.get("/api/auth/setup").json()["required"] is True
+
+
+def test_local_mode_has_nothing_to_claim(local_client):
+    assert local_client.get("/api/auth/setup").json()["required"] is False
+    assert local_client.post(
+        "/api/auth/setup", json={"email": "x@y.it", "password": PASSWORD}
+    ).status_code == 422

@@ -13,7 +13,7 @@ const $ = (id) => document.getElementById(id);
 async function request(url, options) {
   const response = await fetch(url, options);
   // A 401 anywhere but on the login call itself means the session is gone.
-  if (response.status === 401 && url !== "/api/auth/login") {
+  if (response.status === 401 && !url.startsWith("/api/auth/")) {
     showSignIn();
     throw new Error("Autenticazione richiesta");
   }
@@ -29,7 +29,23 @@ async function request(url, options) {
 
 const body = async (url, options) => (await request(url, options)).value;
 
-function showSignIn() {
+let setupMode = false;
+
+async function showSignIn() {
+  // A freshly deployed studio has no account yet: the first visitor creates it,
+  // and the door closes behind them.
+  try {
+    const setup = await body("/api/auth/setup");
+    setupMode = Boolean(setup.required);
+  } catch (error) {
+    setupMode = false;
+  }
+  $("signin-intro").hidden = !setupMode;
+  if (setupMode) {
+    $("signin-intro").textContent = "Questo studio non ha ancora un account. Crea il primo: sarà l'amministratore.";
+    $("signin-submit").textContent = "Crea l'account";
+    $("password").setAttribute("autocomplete", "new-password");
+  }
   $("signin").hidden = false;
 }
 
@@ -117,7 +133,7 @@ $("signin-form").onsubmit = async (event) => {
   event.preventDefault();
   $("signin-message").textContent = "";
   try {
-    await body("/api/auth/login", {
+    await body(setupMode ? "/api/auth/setup" : "/api/auth/login", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({email: $("email").value, password: $("password").value})

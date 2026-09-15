@@ -85,6 +85,10 @@ class Settings:
     auth_mode: str = AUTH_OPEN
     storage_backend: str = STORAGE_LOCAL
     storage_root: pathlib.Path = REPOSITORY_ROOT / ".skyground" / "storage"
+    #: Local storage is durable only when it sits on a mounted volume. The
+    #: operator asserts that; a blueprint sets it next to the disk it refers
+    #: to, so the claim and the mount travel together.
+    storage_is_durable: bool = False
     workspace_root: pathlib.Path = REPOSITORY_ROOT
     s3: S3Settings = field(default_factory=S3Settings)
     session_ttl_hours: int = 24 * 14
@@ -135,10 +139,11 @@ class Settings:
             problems.append("SKYGROUND_DATABASE_URL deve puntare a PostgreSQL in produzione")
         if self.storage_backend == STORAGE_S3 and not self.s3.configured:
             problems.append("configurazione S3/R2 incompleta")
-        if self.storage_backend == STORAGE_LOCAL:
+        if self.storage_backend == STORAGE_LOCAL and not self.storage_is_durable:
             problems.append(
-                "SKYGROUND_STORAGE_BACKEND deve essere 's3' in produzione: "
-                "il disco di un'istanza web non è durevole"
+                "in produzione lo storage deve essere durevole: usa 's3', oppure monta "
+                "un disco persistente e dichiaralo con SKYGROUND_STORAGE_DURABLE=true. "
+                "Il disco di un'istanza senza volume viene perso a ogni deploy."
             )
         if not self.cookie_secure:
             problems.append("SKYGROUND_COOKIE_SECURE deve restare attivo in produzione")
@@ -187,6 +192,7 @@ def load_settings(environ: dict | None = None) -> Settings:
             _env("SKYGROUND_STORAGE_BACKEND", default_storage) or default_storage
         ).strip().lower(),
         storage_root=pathlib.Path(_env("SKYGROUND_STORAGE_ROOT", str(state_dir / "storage"))),
+        storage_is_durable=_flag("SKYGROUND_STORAGE_DURABLE", False),
         workspace_root=workspace_root,
         s3=S3Settings(
             endpoint=_env("SKYGROUND_S3_ENDPOINT"),
