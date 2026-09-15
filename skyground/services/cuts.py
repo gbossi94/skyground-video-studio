@@ -20,6 +20,7 @@ from skyground.analysis import pipeline
 from skyground.analysis.adviser import Adviser, NullAdviser
 from skyground.analysis.cut import CutPolicy
 from skyground.analysis.models import Analysis, CutPlan
+from skyground.core import retime
 from skyground.core.workspace import Workspace, content_digest
 from skyground.db.models import Document, Project, User
 from skyground.errors import NotFound, ValidationError
@@ -213,6 +214,13 @@ def apply(
         project, "project.json", manifest, actor=actor, message="durata dal montaggio automatico"
     )
 
+    # Everything written in output time now points at the wrong frames. Moving
+    # it is part of applying the cut, not a separate errand somebody remembers:
+    # forgetting it renders a film whose subtitles run ahead of the voice.
+    lost = _move_the_layers(
+        documents, project, timeline.get("clips", []), updated["clips"], analysis, actor
+    )
+
     plan.applied_at = datetime.now(UTC).isoformat(timespec="seconds")
     save_plan(session, project, plan, actor=actor)
     audit.record(
@@ -227,5 +235,43 @@ def apply(
         "clips": len(updated["clips"]),
         "duration": updated["duration"],
         "revision": state.revision,
+        "dropped": lost,
         "problems": documents.problems(project),
     }
+
+
+def _move_the_layers(
+    documents: DocumentService,
+    project: Project,
+    old_clips: list[dict],
+    new_clips: list[dict],
+    analysis: Analysis,
+    actor: User | None,
+) -> list[str]:
+    """Re-time captions, cards and angles onto the new cut. Returns what fell out."""
+    from skyground.analysis import align
+
+    words = align.prepare(analysis).words
+    documents.write(
+        project,
+        "captions.json",
+        retime.captions_from(words, new_clips),
+        actor=actor,
+        message="sottotitoli riallineati al nuovo montaggio",
+    )
+
+    lost: list[str] = []
+    for name, move, key in (
+        ("cards.json", retime.move_cards, "card"),
+        ("angles.json", retime.move_angles, "inserto"),
+    ):
+        try:
+            current = documents.read(project, name).content
+        except NotFound:
+            continue
+        moved, gone = move(current, old_clips, new_clips)
+        lost.extend(f"{key} {line}" for line in gone)
+        documents.write(
+            project, name, moved, actor=actor, message="riallineati al nuovo montaggio"
+        )
+    return lost
