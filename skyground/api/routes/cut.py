@@ -77,12 +77,24 @@ def start_analysis(
 
 @router.post("/api/projects/{slug}/cut/propose")
 def propose(
+    payload: dict = Body(default={}),
     context: ProjectContext = Depends(project_context),
     settings: Settings = Depends(get_settings),
 ) -> dict:
+    """Rebuild the proposal.
+
+    Answers given by hand are carried over by default — overruling somebody's
+    choice because they pressed regenerate would be the worst kind of surprise.
+    `keepAnswers: false` starts from the material alone, which is the only way
+    back once a choice has been made and turns out to have been wrong.
+    """
     context.require("document:write")
     plan = cuts.propose(
-        context.session, context.project, actor=context.user, adviser=build_adviser(settings)
+        context.session,
+        context.project,
+        actor=context.user,
+        adviser=build_adviser(settings),
+        keep_answers=bool((payload or {}).get("keepAnswers", True)),
     )
     return {"state": plan.status, "plan": plan.as_dict()}
 

@@ -98,6 +98,7 @@ export default function App() {
           <button
             className="ghost"
             disabled={busy !== null}
+            title="Ricalcola tenendo le scelte fatte a mano"
             onClick={() =>
               run("propose", async () => {
                 const result = await api.propose(project.id);
@@ -108,6 +109,26 @@ export default function App() {
             }
           >
             Rigenera proposta
+          </button>
+          <button
+            className="ghost"
+            disabled={busy !== null || handAnswers(plan) === 0}
+            title={
+              handAnswers(plan) > 0
+                ? `Butta via ${handAnswers(plan)} scelte fatte a mano e riparte dal girato`
+                : "Non c'è nessuna scelta fatta a mano da buttare"
+            }
+            onClick={() =>
+              run("propose", async () => {
+                const result = await api.propose(project.id, false);
+                setNotice("Ripartito dal girato: tutte le scelte sono di nuovo del motore.");
+                setCut((current) =>
+                  current ? { ...current, state: result.plan.status, plan: result.plan } : current,
+                );
+              })
+            }
+          >
+            Riparti da zero
           </button>
           <button
             className="primary"
@@ -221,6 +242,15 @@ export default function App() {
       )}
     </div>
   );
+}
+
+/** How many choices a person made by hand. Those are the sticky ones: a
+ *  rebuild never overturns them, which is why there has to be a way out. */
+function handAnswers(plan: CutPlan | null): number {
+  if (!plan) return 0;
+  return plan.questions.filter(
+    (question) => question.answer !== null && question.answeredBy !== ENGINE,
+  ).length;
 }
 
 function Status({ plan }: { plan: CutPlan }) {

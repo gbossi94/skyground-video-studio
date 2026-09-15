@@ -507,3 +507,52 @@ def test_two_takes_too_close_to_separate_get_no_recommendation():
 
     question = next(q for q in plan.questions if q.id == "take:0-1")
     assert [o for o in question.options if o.recommended] == []
+
+
+# ------------------------------------------ tornare indietro da una scelta
+
+
+def test_a_rebuild_keeps_what_a_person_chose():
+    """Overruling somebody's choice because they pressed regenerate would be
+    the worst kind of surprise."""
+    from skyground.analysis import pipeline
+
+    aborted, end = speak(1.0, "se il tuo centro è bloccato")
+    complete, _ = speak(end + 2.0, "se il tuo centro è bloccato sei nel fango.")
+    analysis = analysis_of(aborted, complete)
+
+    plan = plan_cut(analysis)
+    question = next(item for item in plan.questions if item.resolved)
+    against_the_engine = next(
+        option.id for option in question.options if option.id != question.answer
+    )
+    chosen = pipeline.answer(
+        analysis, plan, question.id, against_the_engine, answered_by="gabriele@skyground.online"
+    )
+
+    again = pipeline.propose(analysis, decisions=pipeline.decisions_from(chosen))
+
+    kept = next(item for item in again.questions if item.id == question.id)
+    assert kept.answer == against_the_engine
+
+
+def test_starting_from_scratch_gives_the_engine_the_last_word_again():
+    """The only way back from a choice that turned out to be wrong."""
+    from skyground.analysis import pipeline
+
+    aborted, end = speak(1.0, "se il tuo centro è bloccato")
+    complete, _ = speak(end + 2.0, "se il tuo centro è bloccato sei nel fango.")
+    analysis = analysis_of(aborted, complete)
+
+    plan = plan_cut(analysis)
+    question = next(item for item in plan.questions if item.resolved)
+    engine_choice = question.answer
+    against = next(option.id for option in question.options if option.id != engine_choice)
+    pipeline.answer(analysis, plan, question.id, against, answered_by="gabriele@skyground.online")
+
+    # No decisions carried over at all: propose from the material alone.
+    fresh = pipeline.propose(analysis)
+
+    restored = next(item for item in fresh.questions if item.id == question.id)
+    assert restored.answer == engine_choice
+    assert restored.answered_by == "motore"

@@ -32,8 +32,14 @@ export const api = {
   projects: () => call<ProjectSummary[]>("/api/projects"),
   cut: (slug: string) => call<CutState>(`/api/projects/${slug}/cut`),
   transcript: (slug: string) => call<Transcript>(`/api/projects/${slug}/cut/transcript`),
-  propose: (slug: string) =>
-    call<{ plan: CutPlan }>(`/api/projects/${slug}/cut/propose`, { method: "POST" }),
+  /** `keepAnswers: false` throws away the choices made by hand and proposes
+   *  from the material alone — the only way back from a choice that turned
+   *  out to be wrong. */
+  propose: (slug: string, keepAnswers = true) =>
+    call<{ plan: CutPlan }>(`/api/projects/${slug}/cut/propose`, {
+      method: "POST",
+      body: JSON.stringify({ keepAnswers }),
+    }),
   answer: (slug: string, questionId: string, option: string) =>
     call<{ plan: CutPlan }>(`/api/projects/${slug}/cut/questions/${encodeURIComponent(questionId)}`, {
       method: "POST",
