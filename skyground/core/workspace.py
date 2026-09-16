@@ -141,6 +141,20 @@ def _refuse_drift(path: pathlib.Path, fps: int, *, allowance: float = 0.5) -> No
         )
 
 
+def _is_neutral_composition(html: str) -> bool:
+    """Whether a composition is the studio's neutral template: picture,
+    captions drawn from captions.json, a mark and a progress bar.
+
+    The template declares it with `data-plain-render`; a project created
+    before that attribute existed carries the same skeleton without it, so
+    the skeleton counts too. A hand-made composition names its own graphics
+    and has neither.
+    """
+    if 'data-plain-render="1"' in html:
+        return True
+    return all(token in html for token in ('data-captions-from=', 'id="captions"', 'id="card-nessuna"'))
+
+
 def _ffpath(path: pathlib.Path) -> str:
     """A path inside an ffmpeg filter option: colons and quotes escaped."""
     return str(path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
@@ -928,7 +942,7 @@ class Workspace:
         """
         base = self.project_dir(project_id)
         html = (base / read_json(base / "project.json")["files"]["composition"]).read_text(encoding="utf-8")
-        if 'data-plain-render="1"' not in html:
+        if not _is_neutral_composition(html):
             return False
         if read_json(base / "cards.json"):
             return False

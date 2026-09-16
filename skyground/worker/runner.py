@@ -90,6 +90,7 @@ class Worker:
         self.running = True
         self._install_signal_handlers()
         logger.info("worker %s avviato", self.name)
+        self.reap_orphans()
         last_reap = 0.0
         while self.running:
             if time.monotonic() - last_reap > 60:
@@ -123,6 +124,15 @@ class Worker:
                 logger.exception("job %s fallito", job_id)
             session.commit()
         return True
+
+    def reap_orphans(self) -> int:
+        """Requeue what a previous worker of this host left running."""
+        with self.session_factory() as session:
+            count = job_service.reap_orphans(session, self.name)
+            session.commit()
+        if count:
+            logger.warning("%s job lasciati a metà da un worker precedente rimessi in coda", count)
+        return count
 
     def reap(self) -> int:
         with self.session_factory() as session:

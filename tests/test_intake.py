@@ -213,6 +213,19 @@ def test_a_plain_film_is_recognised_and_a_card_takes_it_back_to_the_browser(tmp_
     assert ws.is_plain("nuovo-06") is False
 
 
+def test_a_project_laid_out_before_the_marker_existed_is_still_plain(tmp_path):
+    """The neutral template gained `data-plain-render` after the first
+    projects were laid out from it; their composition is the same skeleton
+    without the attribute, and in production it sent a plain film to the
+    browser, which ran the host out of memory."""
+    ws = Workspace(tmp_path)
+    ws.create_project("nuovo-07", "Nuovo", make_video(tmp_path / "girato"))
+    composition = tmp_path / "projects" / "nuovo-07" / "composition" / "index.html"
+    composition.write_text(composition.read_text().replace(' data-plain-render="1"', ""))
+    assert 'data-plain-render' not in composition.read_text()
+    assert ws.is_plain("nuovo-07") is True
+
+
 def test_the_hand_made_composition_is_never_plain(workspace):
     """It has the intro scenes, the angles, the cards: only a browser draws it."""
     assert workspace.is_plain("beauty-centers-growth-01") is False

@@ -161,6 +161,38 @@ def test_a_job_held_by_a_dead_worker_goes_back_to_the_queue(session, project):
     assert "non ha risposto" in job.error
 
 
+def test_a_job_left_running_by_a_restarted_worker_goes_back_at_once(session, project):
+    """The container restarted mid-job: the new worker on the same host
+    requeues it right away instead of waiting for the hour-long stall."""
+    job = job_service.enqueue(session, project, kind="validate")
+    other = job_service.enqueue(session, project, kind="validate")
+    session.commit()
+    job_service.claim(session, "studio-1:32")
+    job_service.claim(session, "studio-2:32")  # another host: not ours to touch
+    session.flush()
+
+    assert job_service.reap_orphans(session, "studio-1:57") == 1
+    assert job.status == JOB_QUEUED
+    assert "riavviato" in job.error
+    assert other.status == JOB_RUNNING
+    # the new worker's own jobs are left alone
+    job_service.claim(session, "studio-1:57")
+    assert job_service.reap_orphans(session, "studio-1:57") == 0
+
+
+def test_the_worker_requeues_its_predecessor_s_jobs_when_it_starts(worker, session_factory, project):
+    with session_factory() as db:
+        job = job_service.enqueue(db, db.get(Project, project.id), kind="validate")
+        db.commit()
+        job_service.claim(db, worker.name.rsplit(":", 1)[0] + ":1")
+        db.commit()
+        job_id = job.id
+
+    assert worker.reap_orphans() == 1
+    with session_factory() as db:
+        assert job_service.get(db, job_id).status == JOB_QUEUED
+
+
 # ------------------------------------------------------------------- worker
 
 
