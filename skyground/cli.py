@@ -115,7 +115,11 @@ def run_evaluate(args, workspace: Workspace) -> int:
     # Through `propose`, not `plan_cut`: the adviser is part of what production
     # runs, so a number that leaves it out measures a different engine.
     adviser = build_adviser()
-    plan = pipeline.propose(analysis, adviser=adviser)
+    from skyground.analysis.editor import build_model
+    from skyground.config import get_settings
+
+    model = build_model() if get_settings().cut_engine == "editor" else None
+    plan = pipeline.propose(analysis, adviser=adviser, model=model)
     score = evaluation.compare([(s.start, s.end) for s in plan.segments], reference)
 
     if args.json:
@@ -127,6 +131,7 @@ def run_evaluate(args, workspace: Workspace) -> int:
     print(
         f"domande aperte: {sum(1 for q in plan.questions if not q.resolved)}"
         f" · decise dal motore: {decided} · consulente: {adviser.name}"
+        f" · montatore: {plan.editor.get('model') or 'euristico'}"
     )
     print(f"\nTENUTO DAL MOTORE, SCARTATO DALL'EDITOR ({len(score.extra)} pezzi):")
     for line in evaluation.describe(score.extra, analysis.words):

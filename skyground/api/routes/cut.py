@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends
 
 from skyground.analysis.adviser import build_adviser
+from skyground.analysis.editor import build_model
 from skyground.api.deps import ProjectContext, get_settings, get_storage, project_context
 from skyground.config import Settings
 from skyground.errors import NotFound, ValidationError
@@ -18,6 +19,13 @@ from skyground.services import jobs as job_service
 from skyground.storage import ObjectStorage
 
 router = APIRouter()
+
+
+def _editor_model(settings: Settings):
+    """The model that edits, when the studio is set to let one."""
+    if settings.cut_engine != "editor":
+        return None
+    return build_model(settings)
 
 
 @router.get("/api/projects/{slug}/cut")
@@ -94,6 +102,7 @@ def propose(
         context.project,
         actor=context.user,
         adviser=build_adviser(settings),
+        model=_editor_model(settings),
         keep_answers=bool((payload or {}).get("keepAnswers", True)),
     )
     return {"state": plan.status, "plan": plan.as_dict()}
@@ -118,6 +127,7 @@ def answer_question(
         option,
         actor=context.user,
         adviser=build_adviser(settings),
+        model=_editor_model(settings),
     )
     return {"state": plan.status, "plan": plan.as_dict()}
 

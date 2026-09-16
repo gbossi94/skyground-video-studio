@@ -61,8 +61,21 @@ def propose(
     policy: CutPolicy | None = None,
     decisions: dict[str, str] | None = None,
     adviser: Adviser | None = None,
+    model=None,
 ) -> CutPlan:
-    """Build a plan. Deterministic given the same analysis and the same answers."""
+    """Build a plan.
+
+    With a `model`, the model edits: it reads the whole transcript, decides
+    what stays, and re-reads the result (`editor.plan_edit`). Without one the
+    heuristic engine runs — string similarity and hand-tuned scores — which is
+    the engine that kept two attempts at the opening line back to back, and
+    stays only for a studio without a key.
+    """
+    if model is not None:
+        from skyground.analysis import editor
+
+        return editor.plan_edit(analysis, model, decisions=decisions, policy=policy)
+
     adviser = adviser or NullAdviser()
     policy = policy or CutPolicy()
     from skyground.analysis import align
@@ -102,6 +115,7 @@ def answer(
     policy: CutPolicy | None = None,
     adviser: Adviser | None = None,
     answered_by: str | None = None,
+    model=None,
 ) -> CutPlan:
     """Record one decision and rebuild the plan around it."""
     question = next((item for item in plan.questions if item.id == question_id), None)
@@ -112,7 +126,13 @@ def answer(
 
     decisions = decisions_from(plan)
     decisions[question_id] = option_id
-    rebuilt = propose(analysis, policy=policy, decisions=decisions, adviser=adviser)
+    if plan.editor.get("decisions"):
+        # The model already edited this film; lay the answer over its edit.
+        from skyground.analysis import editor
+
+        rebuilt = editor.replan(analysis, plan, decisions)
+    else:
+        rebuilt = propose(analysis, policy=policy, decisions=decisions, adviser=adviser, model=model)
 
     # Carry the answers onto the rebuilt questions so the record survives —
     # including *who* answered, which is the whole difference between a choice

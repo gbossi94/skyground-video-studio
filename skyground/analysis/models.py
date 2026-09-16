@@ -381,6 +381,10 @@ class CutPlan:
     #: passage is the unit an editor actually chooses between; comparing single
     #: lines left two thirds of every discarded attempt in the edit.
     passages: list[dict] = field(default_factory=list)
+    #: What the editor model said about its own work: which model ran, its
+    #: summary of the film, the repairs made to its answer, and what the
+    #: re-reading found. Empty when the heuristic engine made the plan.
+    editor: dict[str, Any] = field(default_factory=dict)
     policy: dict[str, Any] = field(default_factory=dict)
     generated_at: str = ""
     applied_at: str = ""
@@ -438,6 +442,7 @@ class CutPlan:
             "takes": [take.as_dict() for take in self.takes],
             "restarts": list(self.restarts),
             "passages": list(self.passages),
+            "editor": dict(self.editor),
         }
 
     @staticmethod
@@ -469,6 +474,7 @@ class CutPlan:
             )
         plan.restarts = list(value.get("restarts", []))
         plan.passages = list(value.get("passages", []))
+        plan.editor = dict(value.get("editor", {}) or {})
         for item in value.get("takes", []):
             plan.takes.append(
                 TakeGroup(

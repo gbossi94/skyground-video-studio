@@ -114,6 +114,7 @@ def propose(
     *,
     actor: User | None = None,
     adviser: Adviser | None = None,
+    model=None,
     keep_answers: bool = True,
 ) -> CutPlan:
     """Generate a plan, carrying over decisions already made."""
@@ -124,11 +125,18 @@ def propose(
             decisions = pipeline.decisions_from(load_plan(session, project))
         except NotFound:
             decisions = {}
+    if model is None:
+        policy = policy_for(project)
+    else:
+        from skyground.analysis import editor
+
+        policy = editor.policy_from((project.settings or {}).get("cutPolicy"))
     plan = pipeline.propose(
         analysis,
-        policy=policy_for(project),
+        policy=policy,
         decisions=decisions,
         adviser=adviser or NullAdviser(),
+        model=model,
     )
     save_plan(session, project, plan, actor=actor)
     audit.record(
@@ -149,6 +157,7 @@ def answer(
     *,
     actor: User | None = None,
     adviser: Adviser | None = None,
+    model=None,
 ) -> CutPlan:
     analysis = load_analysis(session, project)
     plan = load_plan(session, project)
@@ -160,6 +169,7 @@ def answer(
         policy=policy_for(project),
         adviser=adviser or NullAdviser(),
         answered_by=actor.email if actor else None,
+        model=model,
     )
     save_plan(session, project, updated, actor=actor)
     audit.record(

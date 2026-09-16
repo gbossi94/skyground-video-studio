@@ -160,7 +160,7 @@ class Worker:
             source_label=str(job.payload.get("source") or source.name),
         )
         cuts.save_analysis(session, project, analysis)
-        plan = cuts.propose(session, project)
+        plan = cuts.propose(session, project, model=_editor_model())
         return {
             "words": len(analysis.words),
             "duration": analysis.duration,
@@ -300,3 +300,11 @@ def main() -> int:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
+
+
+def _editor_model():
+    from skyground.analysis.editor import build_model
+    from skyground.config import get_settings
+
+    settings = get_settings()
+    return build_model(settings) if settings.cut_engine == "editor" else None
