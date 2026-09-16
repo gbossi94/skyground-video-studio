@@ -197,6 +197,13 @@ def apply(
     documents = DocumentService(session, workspace)
     timeline = documents.read(project, "timeline.json").content
     updated = pipeline.apply_to_timeline(plan, analysis, timeline)
+    # Onto whole frames before anything is timed against it. Doing this at
+    # encode time instead, and writing the result back, is what put the
+    # captions on the wrong frames: they had been placed against numbers the
+    # encoder was about to change.
+    manifest_now = documents.read(project, "project.json").content
+    fps = int(manifest_now.get("canvas", {}).get("fps", 30))
+    updated["duration"] = retime.snap_to_frames(updated["clips"], fps)
     state = documents.write(
         project,
         "timeline.json",

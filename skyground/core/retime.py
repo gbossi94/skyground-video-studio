@@ -26,6 +26,29 @@ from typing import Any
 TOLERANCE = 1.0 / 60.0
 
 
+def snap_to_frames(clips: list[dict], fps: int = 30) -> float:
+    """Place every clip on a whole frame, in place. Returns the total length.
+
+    Film is made of frames: a clip cut at 4.575–9.494 cannot last 4.919 seconds,
+    it lasts 148 frames. Rounding that at encode time and *then* writing the
+    result back into the timeline is what made the layers on top wrong — the
+    captions had already been placed against numbers the encoder was about to
+    change, and nobody noticed because each step, on its own, added up.
+
+    So the rounding happens once, here, and both the timeline and the encoder
+    read the same numbers. Whether the captions are placed before or after the
+    source is rebuilt stops mattering, which is the point: an order that has to
+    be remembered is an order that will eventually be forgotten.
+    """
+    cursor = 0.0
+    for clip in clips:
+        frames = max(1, round((float(clip["end"]) - float(clip["start"])) * fps))
+        clip["output_start"] = round(cursor, 6)
+        clip["frames"] = frames
+        cursor += frames / fps
+    return round(cursor, 6)
+
+
 def spans(clips: list[dict]) -> list[tuple[float, float, float, float]]:
     """(output start, output end, source start, source end) for each clip.
 

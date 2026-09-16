@@ -20,6 +20,7 @@ import tempfile
 import zipfile
 from datetime import UTC, datetime
 
+from skyground.core import retime
 from skyground.errors import NotFound, StudioError, ValidationError
 
 PROJECT_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]*")
@@ -99,6 +100,45 @@ def measured_duration(path: pathlib.Path) -> float:
         capture_output=True, text=True, check=True,
     )
     return float(result.stdout.strip())
+
+
+def stream_durations(path: pathlib.Path) -> tuple[float, float]:
+    """How long the picture lasts and how long the sound lasts, separately."""
+    probe = shutil.which("ffprobe") or str(pathlib.Path(find_ffmpeg()).with_name("ffprobe"))
+
+    def of(stream: str) -> float:
+        result = subprocess.run(
+            [probe, "-v", "error", "-select_streams", stream,
+             "-show_entries", "stream=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+            capture_output=True, text=True, check=True,
+        )
+        text = result.stdout.strip().splitlines()
+        return float(text[0]) if text and text[0] not in ("", "N/A") else 0.0
+
+    return of("v:0"), of("a:0")
+
+
+def _refuse_drift(path: pathlib.Path, fps: int, *, allowance: float = 0.5) -> None:
+    """Refuse a piece whose sound and picture are not the same length.
+
+    This is the check that was missing, and its absence cost a whole render. The
+    old code validated that the *total duration* added up — and it did, because
+    the total duration is the video's. Meanwhile every piece came out with the
+    picture rounded up to a whole frame and the sound not, some forty
+    milliseconds each, and `concat` glues the two streams separately: by the
+    third clip the voice was ahead of the lips, and by the end of the film more
+    than a second. A number that adds up is not the same as a film that works.
+    """
+    video, audio = stream_durations(path)
+    if not audio:
+        return  # nothing to be out of step with
+    drift = abs(video - audio)
+    if drift > allowance / fps:
+        raise ValidationError(
+            f"{path.name}: video {video:.3f}s e audio {audio:.3f}s non durano uguale "
+            f"({drift * 1000:.0f} ms di scarto); concatenandoli il labiale si perde"
+        )
 
 
 def caption_groups(words: list[dict], cards: list[dict], duration: float) -> list[list[dict]]:
@@ -480,31 +520,54 @@ class Workspace:
         # clip, in parallelo: su trentanove clip di 1080×1920 in HEVC il
         # processo viene ucciso dal sistema. Così la memoria non dipende da
         # quante clip ci sono.
+        #
+        # Ogni pezzo dura un numero intero di fotogrammi, e il suo audio dura
+        # esattamente altrettanto. È l'unico modo per concatenare copiando:
+        # `concat` incolla i due flussi separatamente, quindi ogni millisecondo
+        # di differenza fra video e audio dentro un pezzo si somma a quello dei
+        # pezzi prima. Tagliando alla vecchia maniera il video si arrotondava al
+        # fotogramma e l'audio no — una quarantina di millisecondi a clip, più
+        # di un secondo in fondo al video: dopo la prima frase il labiale non
+        # tornava più.
+        #
+        # L'audio intermedio è PCM apposta. A 48 kHz un fotogramma sono 1600
+        # campioni esatti, mentre un frame AAC ne dura 1024 e non si può tagliare
+        # dove serve. L'AAC si fa una volta sola, alla fine, sul montato.
+        #
+        # E i pezzi sono `.mov` perché Matroska non scrive la durata delle
+        # singole tracce: in un `.mkv` il controllo che video e audio durino
+        # uguale non si può nemmeno fare.
+        fps = int(project["canvas"].get("fps", 30))
         output = base / "composition" / "source.mp4"
         output.parent.mkdir(parents=True, exist_ok=True)
-        encode = [
-            "-vf", "fps=30",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
-            "-pix_fmt", "yuv420p", "-video_track_timescale", "30000",
-            "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-ac", "2",
-        ]
         cursor = 0.0
         with tempfile.TemporaryDirectory(prefix="skyground-source-") as work:
             pieces = []
+            # The same numbers the timeline already carries — computed once,
+            # in one place, so the file and the documents cannot disagree.
+            retime.snap_to_frames(timeline["clips"], fps)
             for index, clip in enumerate(timeline["clips"]):
                 start = float(clip["start"])
-                end = float(clip["end"])
-                piece = pathlib.Path(work) / f"{index:04d}.mp4"
+                frames = int(clip["frames"])
+                length = frames / fps
+                piece = pathlib.Path(work) / f"{index:04d}.mov"
                 subprocess.run(
                     [ffmpeg, "-y", "-v", "error",
-                     "-ss", f"{start:.6f}", "-to", f"{end:.6f}", "-i", str(raw),
-                     *encode, str(piece)],
+                     "-ss", f"{start:.6f}", "-i", str(raw),
+                     "-vf", f"fps={fps}", "-frames:v", str(frames),
+                     "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                     "-pix_fmt", "yuv420p", "-video_track_timescale", "30000",
+                     # `apad` perché un pezzo che finisce dove finisce il girato
+                     # avrebbe meno audio che video, e il silenzio è preferibile
+                     # a uno scarto.
+                     "-af", f"aresample=48000,apad",
+                     "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
+                     "-t", f"{length:.6f}",
+                     str(piece)],
                     check=True,
                 )
-                # Where the clip lands is measured, not assumed: everything
-                # timed against the edit — cards, captions — reads these.
-                clip["output_start"] = round(cursor, 6)
-                cursor += measured_duration(piece)
+                _refuse_drift(piece, fps)
+                cursor += length
                 pieces.append(piece)
 
             listing = pathlib.Path(work) / "pezzi.txt"
@@ -513,10 +576,12 @@ class Workspace:
             )
             subprocess.run(
                 [ffmpeg, "-y", "-v", "error", "-f", "concat", "-safe", "0",
-                 "-i", str(listing), "-c", "copy", "-movflags", "+faststart",
-                 str(output)],
+                 "-i", str(listing), "-c:v", "copy",
+                 "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-ac", "2",
+                 "-movflags", "+faststart", str(output)],
                 check=True,
             )
+        _refuse_drift(output, fps, allowance=1.0)
         timeline["duration"] = cursor
         project["canvas"]["duration"] = cursor
         write_json(timeline_path, timeline)
@@ -546,6 +611,13 @@ class Workspace:
             raise ValidationError("progetto non valido:\n- " + "\n- ".join(problems))
         self.sync(project_id)
         composition = base / "composition"
+        fps = int(read_json(base / "project.json")["canvas"].get("fps", 30))
+        # Refuse to spend ten minutes rendering a source whose sound and picture
+        # have already come apart: it would come out the other end just as
+        # broken, and the drift is invisible in every number the render reports.
+        built = composition / "source.mp4"
+        if built.exists():
+            _refuse_drift(built, fps, allowance=1.0)
         output = pathlib.Path(output) if output else self.render_output_path(project_id)
         output.parent.mkdir(parents=True, exist_ok=True)
         local_bin = os.environ.get("HYPERFRAMES_BIN") or shutil.which("hyperframes")
@@ -557,6 +629,7 @@ class Workspace:
         subprocess.run(
             [find_ffmpeg(), "-v", "error", "-i", str(output), "-f", "null", "-"], check=True
         )
+        _refuse_drift(output, fps, allowance=1.0)
         # `latest.mp4` stays a convenience pointer; the versioned file above is
         # the artefact that is never overwritten.
         latest = output.parent / "latest.mp4"
