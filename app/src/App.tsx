@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, type ProjectSummary } from "./api";
 import { Preview, type PreviewHandle } from "./components/Preview";
+import { NewProject } from "./components/NewProject";
 import { ENGINE, Questions, reviewQueue } from "./components/Questions";
 import { Timeline, formatTime } from "./components/Timeline";
 import type { CutPlan, CutState, Option, Question, Transcript } from "./types";
 
 export default function App() {
   const [project, setProject] = useState<ProjectSummary | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [creating, setCreating] = useState(false);
   const [cut, setCut] = useState<CutState | null>(null);
   const [transcript, setTranscript] = useState<Transcript | null>(null);
   const [selected, setSelected] = useState<Question | null>(null);
@@ -22,6 +25,7 @@ export default function App() {
     void (async () => {
       try {
         const projects = await api.projects();
+        setProjects(projects);
         if (!projects.length) return setError("Nessun progetto disponibile");
         setProject(projects[0]);
       } catch (cause) {
@@ -91,9 +95,24 @@ export default function App() {
       <header className="top">
         <div>
           <p className="eyebrow">MONTAGGIO AUTOMATICO</p>
-          <h1>{project.name}</h1>
+          {projects.length > 1 ? (
+            <select
+              className="picker"
+              value={project.id}
+              aria-label="Progetto"
+              onChange={(event) => {
+                const next = projects.find((item) => item.id === event.target.value);
+                if (next) { setCut(null); setProject(next); }
+              }}
+            >
+              {projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          ) : (
+            <h1>{project.name}</h1>
+          )}
         </div>
         <div className="top-actions">
+          <button className="ghost" onClick={() => setCreating(true)}>Nuovo montaggio</button>
           {plan && <Status plan={plan} />}
           <button
             className="ghost"
@@ -155,6 +174,12 @@ export default function App() {
       </header>
 
       {notice && <div className="notice">{notice}</div>}
+      {creating && (
+        <NewProject
+          onClose={() => setCreating(false)}
+          onCreated={(made) => setProjects((current) => [made, ...current])}
+        />
+      )}
 
       {!plan ? (
         <Missing

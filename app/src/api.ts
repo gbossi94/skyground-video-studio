@@ -27,8 +27,40 @@ export interface ProjectSummary {
   previewAvailable: boolean;
 }
 
+export interface JobSummary {
+  id: string;
+  kind: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  attempts: number;
+  error: string | null;
+  result: Record<string, unknown> | null;
+}
+
+/** A raw video becomes a project in one request: the file is the body. */
+async function createProject(slug: string, name: string, file: File, template?: string) {
+  const query = template ? `?template=${encodeURIComponent(template)}` : "";
+  const response = await fetch(`/api/projects/${encodeURIComponent(slug)}${query}`, {
+    method: "PUT",
+    body: file,
+    headers: {
+      "Content-Type": file.type || "video/mp4",
+      "X-Skyground-Name": name,
+      "X-Skyground-Filename": file.name,
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new ApiError((payload as { error?: string }).error ?? "caricamento non riuscito", response.status);
+  }
+  return payload as ProjectSummary;
+}
+
 export const api = {
   me: () => call<{ user: { email: string }; authMode: string }>("/api/auth/me"),
+  createProject,
+  fullCut: (slug: string) =>
+    call<JobSummary>(`/api/projects/${slug}/cut/full`, { method: "POST", body: "{}" }),
+  job: (slug: string, id: string) => call<JobSummary>(`/api/projects/${slug}/jobs/${id}`),
   projects: () => call<ProjectSummary[]>("/api/projects"),
   cut: (slug: string) => call<CutState>(`/api/projects/${slug}/cut`),
   transcript: (slug: string) => call<Transcript>(`/api/projects/${slug}/cut/transcript`),

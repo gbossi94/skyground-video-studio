@@ -215,3 +215,25 @@ def test_the_whole_tool_fits_on_one_screen(page):
     )
     assert metrics["wide"] is False
     assert metrics["doc"] <= metrics["win"] + 40, f"la pagina sborda: {metrics}"
+
+
+# ------------------------------------------------------------ nuovo montaggio
+
+
+def test_a_raw_video_can_be_handed_over_from_the_screen(page, planned, client):
+    """Name, file, one button: the project exists and the whole chain is
+    queued. No worker runs in this test, so the job stays queued — the
+    screen says so instead of pretending."""
+    page.click("text=Nuovo montaggio")
+    page.wait_for_selector(".sheet", timeout=10_000)
+    page.fill(".new-form input[type=text], .new-form input:not([type=file])", "Girato di prova")
+    page.set_input_files(".new-form input[type=file]", str(planned["video"]))
+    page.click(".new-form button.primary")
+
+    page.wait_for_selector(".job .kind", timeout=30_000)
+    assert page.locator(".job .kind").inner_text().lower() in ("queued", "running")
+
+    projects = client.get("/api/projects").json()
+    made = next(p for p in projects if p["id"].startswith("girato-di-prova-"))
+    jobs = client.get(f"/api/projects/{made['id']}/jobs").json()
+    assert any(job["kind"] == "full" for job in (jobs if isinstance(jobs, list) else jobs.get("jobs", [])))
