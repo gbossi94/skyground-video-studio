@@ -22,7 +22,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt \
     # Vedi Dockerfile.combined: l'import va verificato mentre si costruisce.
-    && python -c "from faster_whisper import WhisperModel; import anthropic"
+    && python -c "from faster_whisper import WhisperModel; import anthropic, openai"
 
 COPY alembic.ini studio.py ./
 COPY skyground ./skyground
