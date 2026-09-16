@@ -193,6 +193,28 @@ def test_the_worker_requeues_its_predecessor_s_jobs_when_it_starts(worker, sessi
         assert job_service.get(db, job_id).status == JOB_QUEUED
 
 
+def test_a_stopped_worker_hands_its_job_back_with_the_attempt_returned(worker, session_factory, project):
+    """A deploy replaces the container mid-job: the job goes back to the
+    queue at once, and it did not fail, so it keeps all its attempts."""
+    with session_factory() as db:
+        job = job_service.enqueue(db, db.get(Project, project.id), kind="validate")
+        db.commit()
+        job_service.claim(db, worker.name)
+        db.commit()
+        job_id = job.id
+
+    assert worker.hand_back() is None  # idle: nothing to give back
+    worker.current = job_id
+    assert worker.hand_back() == job_id
+    assert worker.current is None
+    with session_factory() as db:
+        job = job_service.get(db, job_id)
+        assert job.status == JOB_QUEUED
+        assert job.attempts == 0
+        assert job.locked_by is None
+        assert "fermato" in job.error
+
+
 # ------------------------------------------------------------------- worker
 
 

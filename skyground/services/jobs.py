@@ -172,6 +172,32 @@ def cancel(session: Session, job: RenderJob, *, actor: User | None = None) -> Re
     return job
 
 
+def release(session: Session, job: RenderJob, reason: str) -> RenderJob:
+    """Hand a running job back to the queue untouched.
+
+    The worker is being stopped — a deploy is replacing its container — and
+    will not get to finish. The job goes back to the front of the queue with
+    its attempt returned, because nothing failed: the next worker starts it
+    over.
+    """
+    job.status = JOB_QUEUED
+    job.error = reason[:4000]
+    job.attempts = max(job.attempts - 1, 0)
+    job.available_at = utcnow()
+    job.started_at = None
+    job.locked_by = None
+    job.locked_at = None
+    session.flush()
+    audit.record(
+        session,
+        "job.release",
+        project=session.get(Project, job.project_id),
+        target=job.kind,
+        data={"job": job.id, "reason": reason},
+    )
+    return job
+
+
 def reap_orphans(session: Session, worker: str) -> int:
     """Requeue the jobs a previous worker of this same host left running.
 

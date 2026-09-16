@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from skyground.config import Settings, get_settings
 from skyground.core.workspace import Workspace
 from skyground.db import build_engine
-from skyground.db.models import MODE_WORKSPACE, Project, RenderJob
+from skyground.db.models import JOB_RUNNING, MODE_WORKSPACE, Project, RenderJob
 from skyground.errors import StudioError
 from skyground.services import assets as asset_service
 from skyground.services import jobs as job_service
@@ -74,6 +74,7 @@ class Worker:
         self.name = name or f"{socket.gethostname()}:{os.getpid()}"
         self.kinds = kinds
         self.running = False
+        self.current: str | None = None  # the id of the job in flight, if any
         self.handlers: dict[str, Callable[[Session, RenderJob, Project], dict]] = {
             "analyze": self.handle_analyze,
             "full": self.handle_full,
@@ -109,21 +110,40 @@ class Worker:
                 return False
             job_id, kind = job.id, job.kind
 
+        self.current = job_id
+        try:
+            with self.session_factory() as session:
+                job = session.get(RenderJob, job_id)
+                project = session.get(Project, job.project_id)
+                try:
+                    result = self.execute(session, job, project)
+                    job_service.succeed(session, job, result)
+                    logger.info("job %s (%s) completato", job_id, kind)
+                except NotSupported as error:
+                    job_service.fail(session, job, str(error), retry=False)
+                    logger.warning("job %s non supportato: %s", job_id, error)
+                except Exception as error:  # noqa: BLE001 - the queue records every failure
+                    job_service.fail(session, job, f"{type(error).__name__}: {error}")
+                    logger.exception("job %s fallito", job_id)
+                session.commit()
+        finally:
+            self.current = None
+        return True
+
+    def hand_back(self) -> str | None:
+        """Return the job in flight to the queue, because this worker is being
+        stopped and will not finish it. Returns the job id, or None when the
+        worker was idle."""
+        job_id = self.current
+        if job_id is None:
+            return None
         with self.session_factory() as session:
             job = session.get(RenderJob, job_id)
-            project = session.get(Project, job.project_id)
-            try:
-                result = self.execute(session, job, project)
-                job_service.succeed(session, job, result)
-                logger.info("job %s (%s) completato", job_id, kind)
-            except NotSupported as error:
-                job_service.fail(session, job, str(error), retry=False)
-                logger.warning("job %s non supportato: %s", job_id, error)
-            except Exception as error:  # noqa: BLE001 - the queue records every failure
-                job_service.fail(session, job, f"{type(error).__name__}: {error}")
-                logger.exception("job %s fallito", job_id)
-            session.commit()
-        return True
+            if job is not None and job.status == JOB_RUNNING and job.locked_by == self.name:
+                job_service.release(session, job, f"il worker {self.name} è stato fermato a metà")
+                session.commit()
+        self.current = None
+        return job_id
 
     def reap_orphans(self) -> int:
         """Requeue what a previous worker of this host left running."""
@@ -338,8 +358,17 @@ class Worker:
 
     def _install_signal_handlers(self) -> None:
         def stop(_signum, _frame):
-            logger.info("arresto richiesto, chiudo dopo il job corrente")
+            # A deploy is replacing the container, and the platform kills it a
+            # few seconds after this signal: there is no "after the current
+            # job". The job goes back to the queue now, so the worker that
+            # comes up in the new container starts it over at once, and this
+            # process ends without waiting for ffmpeg or the model to return.
             self.running = False
+            handed = self.hand_back()
+            if handed:
+                logger.info("arresto richiesto, job %s restituito alla coda", handed)
+                os._exit(0)
+            logger.info("arresto richiesto, chiudo")
 
         for name in (signal.SIGTERM, signal.SIGINT):
             try:
