@@ -615,6 +615,10 @@ class Workspace:
         (base / "renders").mkdir()
         shutil.copyfile(video, base / "assets" / source_name)
 
+        # The neutral composition, with the studio's music bed in it: the bed
+        # is the one piece of media a new film cannot do without, and the
+        # hand-made project's copy lives in a release archive that production
+        # never pulls. First production film came out with a bare voice.
         template = pathlib.Path(__file__).resolve().parents[1] / "templates" / "composition"
         composition = base / "composition"
         shutil.copytree(template, composition)
@@ -754,7 +758,11 @@ class Workspace:
                      # preso in produzione, su un pezzo di 138 fotogrammi uscito
                      # con 137.
                      "-vf", f"setpts=PTS-STARTPTS,fps={fps}", "-frames:v", str(frames),
-                     "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                     # `fast`, not `medium`: at CRF 18 the picture is the same
+                     # to the eye and the encode is three times quicker. In
+                     # production the pieces took eleven minutes on a
+                     # throttled CPU, longer than the model took to edit.
+                     "-c:v", "libx264", "-preset", "fast", "-crf", "18",
                      "-pix_fmt", "yuv420p", "-video_track_timescale", "30000",
                      # `apad` perché un pezzo che finisce dove finisce il girato
                      # avrebbe meno audio che video, e il silenzio è preferibile
