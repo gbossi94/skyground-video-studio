@@ -207,15 +207,22 @@ class ClaudeModel:
             system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
             output_config={"effort": "high", "format": {"type": "json_schema", "schema": schema}},
             messages=[{"role": "user", "content": user}],
+            # A safety classifier on the newest models can decline a request
+            # that is nothing of the sort — it did, on the first real run: a
+            # numbered transcript of somebody talking about beauty salons was
+            # read as an attempt to duplicate model outputs. With server-side
+            # fallbacks the API reroutes the same call to another model, and
+            # `response.model` says which one answered.
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
         )
         try:
-            with client.messages.stream(model=self.model, **request) as stream:
+            with client.beta.messages.stream(model=self.model, **request) as stream:
                 response = stream.get_final_message()
         except anthropic.NotFoundError:
             # The configured model is not on this account. Say which one ran
             # instead of quietly answering as if it were the one asked for.
-            fallback = "claude-opus-5"
-            with client.messages.stream(model=fallback, **request) as stream:
+            with client.beta.messages.stream(model="claude-opus-5", **request) as stream:
                 response = stream.get_final_message()
         self.served_by = response.model
         if response.stop_reason == "refusal":
