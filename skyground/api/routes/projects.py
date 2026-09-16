@@ -13,7 +13,7 @@ Everything else is additive.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, Request, Response
+from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response
 from sqlalchemy.orm import Session
 
 from skyground.api import serializers
@@ -45,6 +45,51 @@ def list_projects(
         serializers.project_payload(project, workspace, service)
         for project in project_service.list_for_user(session, user)
     ]
+
+
+@router.put("/api/projects/{slug}")
+async def create_project(
+    slug: str,
+    request: Request,
+    name: str | None = Header(default=None, alias="X-Skyground-Name"),
+    template: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+    workspace: Workspace = Depends(get_workspace),
+) -> dict:
+    """A new project from a raw video, in one request.
+
+    The body is the footage, streamed to disk; the project is laid out around
+    it and registered, and the caller becomes its owner. Follow with
+    `POST /api/projects/{slug}/cut/full` and the film comes back edited.
+    """
+    import pathlib
+    import tempfile
+
+    from skyground.api.uploads import receive_object
+    from skyground.storage.local import LocalObjectStorage
+
+    if workspace.exists(slug):
+        raise ValidationError(f"il progetto esiste già: {slug}")
+    spool_root = pathlib.Path(tempfile.gettempdir()) / "skyground-intake"
+    spool = LocalObjectStorage(spool_root)
+    suffix = pathlib.Path(request.headers.get("X-Skyground-Filename") or "raw.mov").suffix or ".mov"
+    key = f"{slug}/raw{suffix.lower()}"
+    stored = await receive_object(request, spool, key, content_type=request.headers.get("Content-Type", ""))
+    try:
+        created = workspace.create_project(
+            slug, name or slug, spool_root / key, template_project=template,
+            language=(request.headers.get("X-Skyground-Language") or "it"),
+        )
+    finally:
+        (spool_root / key).unlink(missing_ok=True)
+    project = project_service.register_workspace_project(session, workspace, slug, owner=user)
+    audit.record(session, "project.create", actor=user, project=project,
+                 data={"bytes": stored.size, "sha256": stored.sha256, **created})
+    service = document_service.DocumentService(session, workspace)
+    payload = serializers.project_payload(project, workspace, service)
+    payload["source"] = created
+    return payload
 
 
 @router.get("/api/projects/{slug}")

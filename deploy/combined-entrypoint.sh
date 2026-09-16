@@ -14,7 +14,24 @@ python studio.py users ensure
 
 # The disk is mounted empty on first boot; the media directory has to exist
 # before either half writes to it.
-mkdir -p "${SKYGROUND_STORAGE_ROOT:-/var/skyground/storage}"
+mkdir -p "${SKYGROUND_STORAGE_ROOT:-/var/skyground/storage}" /var/skyground/.cache/hyperframes
+
+# The workspace — the project folders — lives on the disk too. The image
+# carries the projects checked into the repository and seeds them once; after
+# that, what is on the disk is the truth. A project created from a raw video at
+# runtime, or a document edited through the API, has to outlive the next
+# deploy, and the container's own filesystem does not.
+WORKSPACE="${SKYGROUND_WORKSPACE_ROOT:-/app}"
+if [ "$WORKSPACE" != "/app" ]; then
+    mkdir -p "$WORKSPACE/projects"
+    for seeded in /app/projects/*/; do
+        name="$(basename "$seeded")"
+        if [ ! -d "$WORKSPACE/projects/$name" ]; then
+            echo "skyground: semino il progetto $name nel workspace"
+            cp -r "$seeded" "$WORKSPACE/projects/$name"
+        fi
+    done
+fi
 
 python studio.py worker &
 WORKER=$!

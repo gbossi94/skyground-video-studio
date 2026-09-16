@@ -16,7 +16,7 @@ import os
 import sys
 
 from skyground.core.workspace import Workspace, default_workspace
-from skyground.errors import StudioError
+from skyground.errors import ValidationError, StudioError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -35,6 +35,16 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("project")
     validate = subcommands.add_parser("validate", help="valida uno o tutti i progetti")
     validate.add_argument("project", nargs="?")
+
+    monta = subcommands.add_parser(
+        "monta", help="da un video grezzo a un progetto montato e renderizzato, da solo"
+    )
+    monta.add_argument("project")
+    monta.add_argument("--video", required=True, help="il girato grezzo")
+    monta.add_argument("--name", default=None, help="nome del progetto")
+    monta.add_argument("--template", default="beauty-centers-growth-01",
+                       help="progetto da cui copiare brand, audio e musica")
+    monta.add_argument("--no-render", action="store_true", help="fermati prima del render")
 
     evaluate = subcommands.add_parser(
         "evaluate", help="confronta la proposta del motore col montaggio approvato"
@@ -143,7 +153,72 @@ def run_evaluate(args, workspace: Workspace) -> int:
     return 0
 
 
+def run_monta(args, workspace: Workspace) -> int:
+    """The whole chain on the checkout, without a database: for a machine
+    with ffmpeg, a key, and a video."""
+    import json
+
+    from skyground.analysis import align, editor, invariants, pipeline
+    from skyground.analysis.editor import build_model
+    from skyground.analysis.transcription import build_transcriber
+    from skyground.config import get_settings
+    from skyground.core import retime
+
+    settings = get_settings()
+    created = workspace.create_project(
+        args.project, args.name or args.project, args.video, template_project=args.template
+    )
+    print(f"progetto {args.project}: {created['width']}×{created['height']}, {created['duration']:.1f}s")
+
+    base = workspace.project_dir(args.project)
+    analysis = pipeline.analyze(
+        base / created["source"], transcriber=build_transcriber(settings), source_label=created["source"]
+    )
+    print(f"ascoltato: {len(analysis.words)} parole, {len(analysis.silences)} silenzi")
+    (base / "analysis.json").write_text(json.dumps(analysis.as_dict(), ensure_ascii=False), encoding="utf-8")
+
+    model = build_model(settings) if settings.cut_engine == "editor" else None
+    plan = pipeline.propose(analysis, model=model)
+    if plan.open_questions:
+        raise ValidationError(f"{len(plan.open_questions)} domande aperte: il motore è impostato per chiedere")
+    print(f"montato da {plan.editor.get('model') or 'euristico'}: {len(plan.segments)} segmenti, "
+          f"{plan.stats()['outputDuration']:.1f}s, {sum(1 for q in plan.questions if q.id.startswith('edit:'))} tagli")
+    for line in plan.editor.get("reviews", []):
+        print("  rilettura:", line[:160])
+    (base / "cutplan.json").write_text(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+
+    timeline = workspace.read_document(args.project, "timeline.json")
+    old_clips = list(timeline.get("clips", []))
+    updated = pipeline.apply_to_timeline(plan, analysis, timeline)
+    manifest = workspace.read_document(args.project, "project.json")
+    fps = int(manifest["canvas"].get("fps", 30))
+    updated["duration"] = retime.snap_to_frames(updated["clips"], fps)
+    workspace.write_document(args.project, "timeline.json", updated)
+    manifest["canvas"]["duration"] = updated["duration"]
+    workspace.write_document(args.project, "project.json", manifest)
+    words = align.prepare(analysis).words
+    workspace.write_document(args.project, "captions.json", retime.captions_from(words, updated["clips"]))
+    cards, lost = retime.move_cards(workspace.read_document(args.project, "cards.json"), old_clips, updated["clips"])
+    workspace.write_document(args.project, "cards.json", cards)
+    for line in lost:
+        print("  card:", line)
+
+    workspace.build_source(args.project)
+    workspace.sync(args.project)
+    problems = workspace.validate(args.project)
+    if problems:
+        raise ValidationError("progetto non valido dopo il montaggio:\n- " + "\n- ".join(problems))
+    print("sorgente, colonna sonora, sottotitoli: pronti e validi")
+    if args.no_render:
+        return 0
+    output = workspace.render(args.project)
+    print(f"render: {output}")
+    return 0
+
+
 def run_editorial(args, workspace: Workspace) -> int | None:
+    if args.command == "monta":
+        return run_monta(args, workspace)
     if args.command == "evaluate":
         return run_evaluate(args, workspace)
     if args.command == "list":

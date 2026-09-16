@@ -76,6 +76,7 @@ class Worker:
         self.running = False
         self.handlers: dict[str, Callable[[Session, RenderJob, Project], dict]] = {
             "analyze": self.handle_analyze,
+            "full": self.handle_full,
             "validate": self.handle_validate,
             "sync": self.handle_sync,
             "render": self.handle_render,
@@ -192,6 +193,53 @@ class Worker:
     def _timeline_source(self, session: Session, project: Project) -> str:
         timeline = DocumentService(session, self.workspace).read(project, "timeline.json")
         return (timeline.content or {}).get("source") or "assets/raw.mov"
+
+    def handle_full(self, session: Session, job: RenderJob, project: Project) -> dict:
+        """From raw footage to a rendered film, with nobody in between.
+
+        Each step already existed as its own command, and each was a thing
+        somebody had to remember to run, in order, with the right flags. This
+        is that order, written down once: hear the footage, let the editor
+        decide, write the cut into the documents, rebuild picture and sound,
+        lay the captions, check everything, render, publish. The report says
+        what the editor decided and what was left out, so the film that comes
+        back is never a surprise.
+        """
+        from skyground.analysis.editor import build_model
+        from skyground.services import cuts
+
+        self._require_workspace(project)
+        report: dict = {}
+        if not cuts.has_analysis(session, project) or job.payload.get("reanalyze"):
+            report["analysis"] = self.handle_analyze(session, job, project)
+        override = job.payload.get("editor") or None
+        model = build_model(self.settings, override) if self.settings.cut_engine == "editor" else None
+        plan = cuts.propose(session, project, model=model, keep_answers=not job.payload.get("fresh", True))
+        if plan.open_questions:
+            raise StudioError(
+                f"il montatore ha lasciato {len(plan.open_questions)} domande aperte: "
+                "impostato per chiedere, non per decidere"
+            )
+        report["editor"] = {
+            "model": plan.editor.get("model") or "euristico",
+            "segments": len(plan.segments),
+            "duration": round(plan.stats()["outputDuration"], 3),
+            "cuts": sum(1 for q in plan.questions if q.id.startswith("edit:")),
+            "reviews": plan.editor.get("reviews", []),
+            "summary": plan.editor.get("summary", ""),
+        }
+        applied = cuts.apply(session, project, self.workspace)
+        report["applied"] = {"clips": applied["clips"], "duration": applied["duration"],
+                             "dropped": applied.get("dropped", [])}
+        session.commit()  # the documents are on disk and in the database before the long steps
+        self.workspace.build_source(project.slug)
+        self.workspace.sync(project.slug)
+        problems = self.workspace.validate(project.slug)
+        if problems:
+            raise StudioError("progetto non valido dopo il montaggio:\n- " + "\n- ".join(problems))
+        if job.payload.get("render", True):
+            report["render"] = self.handle_render(session, job, project)
+        return report
 
     def handle_validate(self, session: Session, job: RenderJob, project: Project) -> dict:
         problems = DocumentService(session, self.workspace).problems(project)

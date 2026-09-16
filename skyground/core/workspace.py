@@ -141,13 +141,17 @@ def _refuse_drift(path: pathlib.Path, fps: int, *, allowance: float = 0.5) -> No
         )
 
 
-def caption_groups(words: list[dict], cards: list[dict], duration: float) -> list[list[dict]]:
+def caption_groups(
+    words: list[dict], cards: list[dict], duration: float, *, captions_from: float = 0.0
+) -> list[list[dict]]:
     """Group caption words into on-screen lines, skipping motion-card windows.
 
     Skyground rule: a motion graphic and a caption never state the same thing at
-    the same time, so every word inside a card interval is dropped.
+    the same time, so every word inside a card interval is dropped. A
+    composition with a hand-made opening says where its captions may start
+    (`data-captions-from` on `#main`); the neutral template starts at zero.
     """
-    blocked = [(0.0, 8.43)] + [(float(card["a"]), float(card["b"])) for card in cards]
+    blocked = [(0.0, float(captions_from))] + [(float(card["a"]), float(card["b"])) for card in cards]
     groups: list[list[dict]] = []
     current: list[dict] = []
     for word in words:
@@ -443,7 +447,18 @@ class Workspace:
         if not root_duration:
             raise StudioError("durata della composizione non trovata")
         old_duration = root_duration.group(1)
-        html = html.replace(old_duration, str(duration))
+        # Only where the number means the duration. A global replace of the
+        # old value worked while it was «115.93333333333325» and unique; on a
+        # fresh composition whose duration is «1» it would rewrite every 1 in
+        # the file.
+        html = re.sub(
+            r'data-duration="' + re.escape(old_duration) + '"',
+            f'data-duration="{duration}"', html,
+        )
+        html = re.sub(
+            r"(scaleX:1,duration:)" + re.escape(old_duration) + r"(,ease:'none')",
+            lambda m: f"{m.group(1)}{duration}{m.group(2)}", html,
+        )
 
         card_start = html.find('<div id="card-')
         caption_marker = '<div id="captions"></div>'
@@ -451,11 +466,15 @@ class Workspace:
         if card_start < 0 or card_end < 0:
             raise StudioError("blocco card non trovato")
         card_markup = "".join(
-            f'<div id="card-{card["id"]}" class="newcard {card["kind"]}">'
+            f'<div id="card-{card["id"]}" class="newcard {card.get("kind", "")}">'
             f'<div class="clabel">{card["label"]}</div>'
             f'<div class="cbody">{card["body"]}</div></div>'
             for card in cards
         )
+        if not cards:
+            # The marker the next sync looks for has to survive a film with no
+            # motion graphics at all.
+            card_markup = '<div id="card-nessuna" class="newcard" style="display:none"></div>'
         html = html[:card_start] + card_markup + html[card_end:]
 
         cards_json = json.dumps(cards, ensure_ascii=False, separators=(",", ":"))
@@ -469,7 +488,9 @@ class Workspace:
         if count != 1:
             raise StudioError("array fullCards non trovato")
 
-        groups = caption_groups(captions, cards, duration)
+        from_match = re.search(r'data-captions-from="([^"]+)"', html)
+        captions_from = float(from_match.group(1)) if from_match else 0.0
+        groups = caption_groups(captions, cards, duration, captions_from=captions_from)
         groups_json = json.dumps(groups, ensure_ascii=False, separators=(",", ":"))
         html, count = re.subn(
             r"const captionGroups=.*?;\ncaptionGroups\.forEach",
@@ -491,7 +512,7 @@ class Workspace:
             if angle.get("enabled") and angle.get("asset")
         )
         html, count = re.subn(
-            r'(<video id="raw".*?</video>)(?:<video id="angle-.*?</video>)+',
+            r'(<video id="raw".*?</video>)(?:<video id="angle-.*?</video>)*',
             lambda match: match.group(1) + angle_markup,
             html,
             count=1,
@@ -504,6 +525,130 @@ class Workspace:
         write_json(composition.parent / "cards.json", cards)
         write_json(composition.parent / "captions.json", captions)
         return {"cards": len(cards), "words": len(captions), "captionGroups": len(groups)}
+
+    def create_project(
+        self,
+        project_id: str,
+        name: str,
+        video: pathlib.Path | str,
+        *,
+        template_project: str | None = None,
+        client: str = "Skyground",
+        language: str = "it",
+    ) -> dict:
+        """A new project around a raw video, ready for the editor.
+
+        Until now the studio could edit a project somebody had already laid out
+        by hand, and could not start one. This lays out the minimum a cut needs:
+        the manifest with the canvas measured from the file, an empty timeline
+        that points at the footage, no cards, no inserts, and the *neutral*
+        composition — picture, captions, brand mark, progress bar. Motion
+        graphics are a design job per film and are not pretended here.
+
+        Brand, audio settings and music come from `template_project` when one
+        is named and exists in the workspace, so a new film sounds and looks
+        like the studio's others.
+        """
+        if not PROJECT_ID_PATTERN.fullmatch(project_id):
+            raise ValidationError(f"identificativo non valido: {project_id}")
+        base = (self.projects / project_id).resolve()
+        if base.parent != self.projects.resolve():
+            raise ValidationError(f"identificativo non valido: {project_id}")
+        if base.exists():
+            raise ValidationError(f"il progetto esiste già: {project_id}")
+        self.projects.mkdir(parents=True, exist_ok=True)
+        video = pathlib.Path(video)
+        if not video.is_file():
+            raise NotFound(f"video non trovato: {video}")
+
+        probe = self._probe(video)
+        source_name = f"raw{video.suffix.lower() or '.mov'}"
+        (base / "assets").mkdir(parents=True)
+        (base / "renders").mkdir()
+        shutil.copyfile(video, base / "assets" / source_name)
+
+        template = pathlib.Path(__file__).resolve().parents[1] / "templates" / "composition"
+        composition = base / "composition"
+        shutil.copytree(template, composition)
+
+        brand = {"name": client, "colors": {"accent": "#5c0bfe", "paper": "#f4f5f0", "ink": "#141414"},
+                 "fonts": {"sans": "sans.ttf", "serif": "serif.ttf"}, "rules": []}
+        audio = {
+            "master": {"targetLufs": -16, "truePeak": -1.8},
+            "voice": {"asset": "composition/voice.m4a", "targetLufs": -16},
+            "music": {"asset": "composition/music.mp3", "targetLufs": -32, "loop": True},
+            "renderedMix": "composition/soundtrack.m4a",
+            "ducking": {"threshold": 0.03, "ratio": 4, "attackMs": 15, "releaseMs": 280},
+        }
+        if template_project and self.exists(template_project):
+            origin = self.project_dir(template_project)
+            for name_, target in (("brand.json", brand), ("audio.json", audio)):
+                if (origin / name_).exists():
+                    target.clear()
+                    target.update(read_json(origin / name_))
+            for media in ("music.mp3",):
+                if (origin / "composition" / media).exists():
+                    shutil.copyfile(origin / "composition" / media, composition / media)
+
+        write_json(base / "project.json", {
+            "schemaVersion": 1,
+            "id": project_id,
+            "name": name,
+            "client": client,
+            "status": "draft",
+            "language": language,
+            "canvas": {"width": 1080, "height": 1920, "fps": 30, "duration": round(probe["duration"], 3)},
+            "source": {"width": probe["width"], "height": probe["height"], "fps": probe["fps"]},
+            "files": {
+                "timeline": "timeline.json", "captions": "captions.json", "cards": "cards.json",
+                "angles": "angles.json", "brand": "brand.json", "audio": "audio.json",
+                "composition": "composition/index.html", "preview": "preview.mp4",
+            },
+            "assets": {"lockfile": "assets.lock.json", "directory": "assets"},
+            "render": {"engine": "hyperframes", "compositionId": "main", "quality": "high",
+                       "outputDirectory": "renders"},
+        })
+        write_json(base / "timeline.json", {
+            "source": f"assets/{source_name}",
+            "clips": [{"start": 0.0, "end": round(probe["duration"], 3), "output_start": 0.0,
+                       "label": "girato intero, non ancora montato"}],
+            "corrections": [],
+            "duration": round(probe["duration"], 3),
+            "generatedBy": "create_project",
+        })
+        write_json(base / "captions.json", [])
+        write_json(base / "cards.json", [])
+        write_json(base / "angles.json", [])
+        write_json(base / "brand.json", brand)
+        write_json(base / "audio.json", audio)
+        write_json(base / "assets.lock.json", {"version": 1, "files": []})
+        (base / "README.md").write_text(
+            f"# {name}\n\nProgetto creato da `{video.name}` "
+            f"({probe['width']}×{probe['height']}, {probe['fps']:g} fps, {probe['duration']:.1f}s). "
+            "Il montaggio è del motore: ogni taglio è nella coda di revisione dell'editor con il suo motivo.\n",
+            encoding="utf-8",
+        )
+        return {"id": project_id, "source": f"assets/{source_name}", **probe}
+
+    @staticmethod
+    def _probe(video: pathlib.Path) -> dict:
+        probe = shutil.which("ffprobe") or str(pathlib.Path(find_ffmpeg()).with_name("ffprobe"))
+        out = subprocess.run(
+            [probe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height,r_frame_rate:format=duration",
+             "-of", "json", str(video)],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        data = json.loads(out)
+        stream = (data.get("streams") or [{}])[0]
+        num, _, den = str(stream.get("r_frame_rate", "30/1")).partition("/")
+        fps = float(num) / float(den or 1) if num else 30.0
+        return {
+            "width": int(stream.get("width", 0)),
+            "height": int(stream.get("height", 0)),
+            "fps": round(fps, 3),
+            "duration": float(data.get("format", {}).get("duration", 0.0)),
+        }
 
     def build_source(self, project_id: str) -> float:
         base = self.project_dir(project_id)
@@ -726,7 +871,16 @@ class Workspace:
             _refuse_drift(built, fps, allowance=1.0)
         output = pathlib.Path(output) if output else self.render_output_path(project_id)
         output.parent.mkdir(parents=True, exist_ok=True)
-        local_bin = os.environ.get("HYPERFRAMES_BIN") or shutil.which("hyperframes")
+        # The renderer is a dependency of *this repository*, not of the project
+        # being rendered: resolved from here, whatever the working directory.
+        # `npx --no-install` run inside a project on another disk found no
+        # node_modules and tried to download the package instead.
+        installed = REPOSITORY_ROOT / "node_modules" / ".bin" / "hyperframes"
+        local_bin = (
+            os.environ.get("HYPERFRAMES_BIN")
+            or (str(installed) if installed.is_file() else None)
+            or shutil.which("hyperframes")
+        )
         command = (
             [local_bin, "render"] if local_bin else ["npx", "--no-install", "hyperframes", "render"]
         )

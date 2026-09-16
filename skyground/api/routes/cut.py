@@ -108,6 +108,30 @@ def propose(
     return {"state": plan.status, "plan": plan.as_dict()}
 
 
+@router.post("/api/projects/{slug}/cut/full")
+def full_cut(
+    payload: dict = Body(default={}),
+    context: ProjectContext = Depends(project_context),
+) -> dict:
+    """Queue the whole thing: hear, decide, cut, rebuild, render, publish.
+
+    `editor` picks the model for this run; `render: false` stops before the
+    render; `reanalyze: true` transcribes again even when an analysis exists.
+    """
+    context.require("job:create")
+    job = job_service.enqueue(
+        context.session,
+        context.project,
+        kind="full",
+        payload={k: v for k, v in (payload or {}).items() if k in ("editor", "render", "reanalyze", "fresh")},
+        actor=context.user,
+        max_attempts=1,
+    )
+    from skyground.api import serializers
+
+    return serializers.job_payload(job)
+
+
 @router.post("/api/projects/{slug}/cut/questions/{question_id}")
 def answer_question(
     question_id: str,

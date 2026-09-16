@@ -21,14 +21,24 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     NPM_CONFIG_UPDATE_NOTIFIER=false \
     SKYGROUND_ENV=production \
-    SKYGROUND_WORKSPACE_ROOT=/app
+    SKYGROUND_WORKSPACE_ROOT=/var/skyground/workspace
 
 WORKDIR /app
 
-# FFmpeg for the analysis and the proxies; Node for the HyperFrames renderer.
+# FFmpeg for the analysis and the proxies; Node for the HyperFrames renderer;
+# Chromium for the renderer's browser. HyperFrames would otherwise download a
+# headless shell into the home directory on first use — a download per deploy,
+# against shared libraries a slim image does not have. The system package
+# brings the libraries with it, and the path is handed over below.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg nodejs npm ca-certificates \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg nodejs npm ca-certificates chromium fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
+ENV HYPERFRAMES_BROWSER_PATH=/usr/bin/chromium \
+    HYPERFRAMES_NO_TELEMETRY=1 \
+    HYPERFRAMES_NO_UPDATE_CHECK=1 \
+    HYPERFRAMES_FONT_CACHE_DIR=/var/skyground/.cache/hyperframes/fonts \
+    HYPERFRAMES_EXTRACT_CACHE_DIR=/var/skyground/.cache/hyperframes/extract
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt \
