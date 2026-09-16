@@ -51,19 +51,23 @@ def snap_to_frames(clips: list[dict], fps: int = 30) -> float:
     return round(cursor, 6)
 
 
-def spans(clips: list[dict]) -> list[tuple[float, float, float, float]]:
+def spans(clips: list[dict], fps: int = 30) -> list[tuple[float, float, float, float]]:
     """(output start, output end, source start, source end) for each clip.
 
     `output_start` is read when it is there and recomputed when it is not, so a
-    timeline written by hand works the same as one written by the engine.
+    timeline written by hand works the same as one written by the engine. A
+    clip snapped to frames lasts `frames / fps` in the film, not `end - start`:
+    reading the nominal length here put the last card eight milliseconds past
+    the end of a film and failed validation.
     """
     placed: list[tuple[float, float, float, float]] = []
     cursor = 0.0
     for clip in clips:
         start, end = float(clip["start"]), float(clip["end"])
+        length = int(clip["frames"]) / fps if clip.get("frames") else end - start
         at = float(clip.get("output_start", cursor))
-        placed.append((at, at + (end - start), start, end))
-        cursor = at + (end - start)
+        placed.append((at, at + length, start, end))
+        cursor = at + length
     return placed
 
 

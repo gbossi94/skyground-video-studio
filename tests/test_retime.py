@@ -142,3 +142,11 @@ def test_a_card_squeezed_out_by_the_next_one_is_dropped_and_said():
 
     assert [card["id"] for card in moved] == ["due"]
     assert len(lost) == 1 and "uno" in lost[0] and "posto" in lost[0]
+
+
+def test_a_snapped_clip_lasts_its_frames_not_its_nominal_length():
+    """4.919s of source is 148 frames in the film. A card placed against the
+    nominal length landed eight milliseconds past the end of the film."""
+    clips = [{"start": 4.575, "end": 9.494}]
+    retime.snap_to_frames(clips, 30)
+    assert retime.spans(clips)[0][1] == pytest.approx(148 / 30)
