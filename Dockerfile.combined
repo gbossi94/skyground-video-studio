@@ -32,8 +32,16 @@ WORKDIR /app
 # brings the libraries with it, and the path is handed over below.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ffmpeg nodejs npm ca-certificates chromium fonts-liberation \
+        ffmpeg ca-certificates chromium fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
+# Node 22, taken from the stage that already has it: HyperFrames refuses to
+# run on the Node 20 that Debian ships, and it said so only at the first
+# render in production.
+COPY --from=editor /usr/local/bin/node /usr/local/bin/node
+COPY --from=editor /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && node --version && npm --version
 ENV HYPERFRAMES_BROWSER_PATH=/usr/bin/chromium \
     HYPERFRAMES_NO_TELEMETRY=1 \
     HYPERFRAMES_NO_UPDATE_CHECK=1 \
