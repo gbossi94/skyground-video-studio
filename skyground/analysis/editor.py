@@ -275,7 +275,8 @@ class OpenAIModel:
             ids = [m.id for m in client.models.list()]
         except Exception:
             return []
-        return sorted((i for i in ids if i.startswith(("gpt", "o"))), reverse=True)[:20]
+        noise = ("transcribe", "realtime", "audio", "image", "moderation", "tts", "embedding", "search")
+        return sorted(i for i in ids if i.startswith("gpt") and not any(n in i for n in noise))
 
     def ask(self, system: str, user: str, schema: dict) -> dict:
         client = self._sdk()
