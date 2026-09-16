@@ -9,6 +9,8 @@ and the cut had moved underneath it.
 
 from __future__ import annotations
 
+import pytest
+
 from skyground.analysis.models import Word
 from skyground.core import retime
 
@@ -107,3 +109,36 @@ def test_output_starts_are_recomputed_when_a_timeline_does_not_carry_them():
     """A timeline written by hand works the same as one written by the engine."""
     written_by_hand = [{"start": 10.0, "end": 14.0}, {"start": 24.0, "end": 30.0}]
     assert retime.spans(written_by_hand) == retime.spans(CUT)
+
+
+def test_two_cards_that_land_on_each_other_do_not_overlap():
+    """A shorter cut can bring two anchors close together. The earlier card
+    gives way; it never covers the later one."""
+    before = [{"start": 0.0, "end": 40.0, "output_start": 0.0}]
+    # Removing 10–29 from the source: a card at 8.0–13.0 still runs to 13.0 in
+    # the output, and the card anchored at 31.0 now lands at 12.0 — inside it.
+    after = [{"start": 0.0, "end": 10.0, "output_start": 0.0}, {"start": 29.0, "end": 40.0, "output_start": 10.0}]
+    cards = [
+        {"id": "uno", "label": "A", "a": 8.0, "b": 13.0},
+        {"id": "due", "label": "B", "a": 31.0, "b": 34.0},
+    ]
+
+    moved, lost = retime.move_cards(cards, before, after)
+
+    assert lost == []
+    assert moved[0]["b"] <= moved[1]["a"]
+    assert moved[0]["b"] == pytest.approx(moved[1]["a"] - retime.GAP)
+
+
+def test_a_card_squeezed_out_by_the_next_one_is_dropped_and_said():
+    before = [{"start": 0.0, "end": 40.0, "output_start": 0.0}]
+    after = [{"start": 0.0, "end": 10.0, "output_start": 0.0}, {"start": 29.9, "end": 40.0, "output_start": 10.0}]
+    cards = [
+        {"id": "uno", "label": "A", "a": 9.8, "b": 12.0},
+        {"id": "due", "label": "B", "a": 30.0, "b": 33.0},
+    ]
+
+    moved, lost = retime.move_cards(cards, before, after)
+
+    assert [card["id"] for card in moved] == ["due"]
+    assert len(lost) == 1 and "uno" in lost[0] and "posto" in lost[0]

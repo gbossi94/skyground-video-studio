@@ -24,6 +24,8 @@ from typing import Any
 
 #: Mezzo frame a 30 fps: sotto questa soglia due tempi sono lo stesso tempo.
 TOLERANCE = 1.0 / 60.0
+#: Aria fra una card e la successiva quando la prima deve farle posto.
+GAP = 0.2
 
 
 def snap_to_frames(clips: list[dict], fps: int = 30) -> float:
@@ -136,13 +138,28 @@ def move_cards(
         landed = dict(card)
         landed["a"] = round(at, 3)
         landed["b"] = round(min(total, at + length), 3)
-        if landed["b"] - landed["a"] < 0.4:
-            lost.append(f"{card['id']}: resterebbe in video meno di mezzo secondo")
-            continue
         moved.append(landed)
 
+    # Two cards can follow their moments into the same stretch of a shorter
+    # cut. A card never covers another: the earlier one gives way, and one
+    # squeezed below half a second is a flicker, not a graphic, so it goes.
     moved.sort(key=lambda item: item["a"])
-    return moved, lost
+    fitted: list[dict] = []
+    for card in moved:
+        if fitted and card["a"] < fitted[-1]["b"]:
+            fitted[-1]["b"] = round(card["a"] - GAP, 3)
+            if fitted[-1]["b"] - fitted[-1]["a"] < 0.4:
+                squeezed = fitted.pop()
+                lost.append(
+                    f"{squeezed['id']}: «{squeezed['label']}» non ha più posto prima di "
+                    f"«{card['label']}» nel montaggio più corto"
+                )
+        fitted.append(card)
+    for card in fitted:
+        if card["b"] - card["a"] < 0.4:
+            lost.append(f"{card['id']}: resterebbe in video meno di mezzo secondo")
+    fitted = [card for card in fitted if card["b"] - card["a"] >= 0.4]
+    return fitted, lost
 
 
 def move_angles(
