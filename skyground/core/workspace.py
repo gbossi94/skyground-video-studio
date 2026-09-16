@@ -586,7 +586,113 @@ class Workspace:
         project["canvas"]["duration"] = cursor
         write_json(timeline_path, timeline)
         write_json(base / "project.json", project)
+        # Sound and picture are rebuilt together, always. Leaving this to a
+        # second command that somebody has to remember is how the renderer ended
+        # up laying the previous edit's voice over a new cut.
+        for line in self.build_soundtrack(project_id):
+            print(f"colonna sonora: {line}")
         return cursor
+
+    def build_soundtrack(self, project_id: str) -> list[str]:
+        """Rebuild the mix from the cut that exists now. Returns what was left out.
+
+        This did not exist, and its absence is what a person actually heard. The
+        studio could re-cut the picture and could not re-cut the sound: the
+        renderer reads `composition/soundtrack.m4a`, and that file was the mix of
+        the *approved* edit, 115.9 seconds of a different arrangement of the same
+        footage. Laid over a 113.7 second cut it agreed for exactly one sentence
+        — the opening line, which both edits happen to start with — and then the
+        voice was talking about something else than the mouth.
+
+        The voice is not a separate asset to keep in step: it *is* the sound of
+        the rebuilt source, so it is taken from there and can never disagree with
+        the picture again. Music loops and has no timing of its own. Anything
+        that was baked against a previous edit is named in the return value
+        rather than laid over the wrong moments.
+        """
+        base = self.project_dir(project_id)
+        composition = base / "composition"
+        source = composition / "source.mp4"
+        if not source.exists():
+            raise NotFound("source.mp4 non c'è: esegui build-source")
+        settings = read_json(base / "audio.json")
+        project = read_json(base / "project.json")
+        fps = int(project["canvas"].get("fps", 30))
+        length = measured_duration(source)
+        ffmpeg = find_ffmpeg()
+
+        voice_target = float(settings.get("voice", {}).get("targetLufs", -16))
+        music_target = float(settings.get("music", {}).get("targetLufs", -32))
+        master = settings.get("master", {})
+        peak = float(master.get("truePeak", -1.8))
+        ducking = settings.get("ducking", {})
+
+        voice = composition / pathlib.Path(
+            settings.get("voice", {}).get("asset", "composition/voice.m4a")
+        ).name
+        subprocess.run(
+            [ffmpeg, "-y", "-v", "error", "-i", str(source), "-vn",
+             "-af", f"aresample=48000,loudnorm=I={voice_target}:TP={peak}:LRA=11,apad",
+             "-t", f"{length:.6f}",
+             "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-ac", "2", str(voice)],
+            check=True,
+        )
+
+        left_out: list[str] = []
+        effects = settings.get("effects", {}).get("asset")
+        if effects and (base / effects).exists():
+            left_out.append(
+                f"{pathlib.Path(effects).name}: è un nastro già mixato sul montaggio "
+                "precedente, non una lista di effetti con i loro tempi, quindi non si "
+                "può rimettere a tempo — resta fuori invece di cadere sui momenti sbagliati"
+            )
+
+        mix = composition / pathlib.Path(
+            settings.get("renderedMix", "composition/soundtrack.m4a")
+        ).name
+        music = composition / pathlib.Path(
+            settings.get("music", {}).get("asset", "composition/music.mp3")
+        ).name
+        limit = 10 ** (peak / 20)
+        if music.exists():
+            # `asplit` because the voice is needed twice — once to duck the
+            # music with and once in the mix — and a filter output can only be
+            # consumed once. And the labels are words: a label of `[v]` or `[a]`
+            # is read by ffmpeg as a stream specifier, not as a name.
+            chain = (
+                f"[0:a]aresample=48000,loudnorm=I={voice_target}:TP={peak}:LRA=11,apad,"
+                f"asplit=2[voce][chiave];"
+                f"[1:a]aresample=48000,loudnorm=I={music_target}:TP={peak}:LRA=11[musica];"
+                f"[musica][chiave]sidechaincompress="
+                f"threshold={float(ducking.get('threshold', 0.03))}:"
+                f"ratio={float(ducking.get('ratio', 4))}:"
+                f"attack={float(ducking.get('attackMs', 15))}:"
+                f"release={float(ducking.get('releaseMs', 280))}[abbassata];"
+                f"[voce][abbassata]amix=inputs=2:duration=first:normalize=0[insieme];"
+                f"[insieme]alimiter=limit={limit:.4f}[uscita]"
+            )
+            subprocess.run(
+                [ffmpeg, "-y", "-v", "error", "-i", str(source),
+                 "-stream_loop", "-1", "-i", str(music),
+                 "-filter_complex", chain, "-map", "[uscita]", "-t", f"{length:.6f}",
+                 "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-ac", "2", str(mix)],
+                check=True,
+            )
+        else:
+            left_out.append(f"{music.name}: non c'è, la colonna sonora è la sola voce")
+            shutil.copyfile(voice, mix)
+
+        # The mix is what the renderer lays over the picture: if it is not the
+        # same length, everything after the first cut is a guess.
+        for produced in (voice, mix):
+            drift = abs(measured_duration(produced) - length)
+            if drift > 1.0 / fps:
+                raise ValidationError(
+                    f"{produced.name} dura {measured_duration(produced):.3f}s contro i "
+                    f"{length:.3f}s dell'immagine ({drift * 1000:.0f} ms): "
+                    "sopra il montaggio non starebbe a tempo"
+                )
+        return left_out
 
     # ----------------------------------------------------------------- render
 

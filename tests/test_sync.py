@@ -195,3 +195,97 @@ def test_concatenating_the_pieces_does_not_accumulate_drift(tmp_path):
     # Mezzo fotogramma su otto clip. Prima erano trecento millisecondi.
     assert abs(video - audio) < 1 / 60
     workspace._refuse_drift(montato, 30, allowance=1.0)
+
+
+# ------------------------------------------------- la voce, e da dove viene
+
+
+@needs_ffmpeg
+def test_the_soundtrack_is_rebuilt_from_the_cut_that_exists_now(tmp_path):
+    """Il difetto che una persona ha davvero sentito.
+
+    Lo studio sapeva rimontare l'immagine e non il suono: il renderizzatore
+    legge `composition/soundtrack.m4a`, e quel file era il mix del montaggio
+    *approvato* — un'altra disposizione dello stesso girato. Sopra un montaggio
+    più corto andava d'accordo per una frase, quella d'apertura che i due
+    montaggi hanno in comune, e da lì in poi la voce parlava d'altro rispetto
+    alla bocca.
+    """
+    from skyground.core.workspace import Workspace
+
+    root = tmp_path / "checkout"
+    composition = root / "projects" / "prova" / "composition"
+    composition.mkdir(parents=True)
+    base = composition.parent
+
+    # L'immagine rimontata: sei secondi.
+    make_clip(composition / "source.mp4", 6.0)
+    # E la colonna sonora di un montaggio precedente, lunga il doppio.
+    make_clip(composition / "soundtrack.m4a", 12.0)
+    subprocess.run(
+        [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", "sine=frequency=300:duration=4",
+         "-c:a", "libmp3lame", str(composition / "music.mp3")],
+        check=True,
+    )
+    (base / "project.json").write_text(
+        '{"schemaVersion": 1, "canvas": {"width": 1080, "height": 1920, '
+        '"fps": 30, "duration": 6.0}}',
+        encoding="utf-8",
+    )
+    (base / "audio.json").write_text(
+        '{"master": {"targetLufs": -16, "truePeak": -1.8},'
+        ' "voice": {"asset": "composition/voice.m4a", "targetLufs": -16},'
+        ' "music": {"asset": "composition/music.mp3", "targetLufs": -32, "loop": true},'
+        ' "renderedMix": "composition/soundtrack.m4a",'
+        ' "ducking": {"threshold": 0.03, "ratio": 4, "attackMs": 15, "releaseMs": 280}}',
+        encoding="utf-8",
+    )
+
+    Workspace(root).build_soundtrack("prova")
+
+    picture = workspace.measured_duration(composition / "source.mp4")
+    for made in ("voice.m4a", "soundtrack.m4a"):
+        assert abs(workspace.measured_duration(composition / made) - picture) < 1 / 30, (
+            f"{made} non dura quanto l'immagine"
+        )
+
+
+@needs_ffmpeg
+def test_a_mix_that_does_not_match_the_picture_is_refused(tmp_path):
+    """Se il mix esce della lunghezza sbagliata lo studio deve fermarsi, non
+    consegnarlo: sopra il montaggio non starebbe a tempo e nessun numero del
+    render lo direbbe."""
+    from skyground.core.workspace import Workspace
+    from skyground.errors import ValidationError
+
+    root = tmp_path / "checkout"
+    composition = root / "projects" / "prova" / "composition"
+    composition.mkdir(parents=True)
+    base = composition.parent
+    make_clip(composition / "source.mp4", 6.0)
+    (base / "project.json").write_text(
+        '{"schemaVersion": 1, "canvas": {"fps": 30, "duration": 6.0}}', encoding="utf-8"
+    )
+    # Nessuna musica e una voce che il mix copierà: qui si controlla il rifiuto,
+    # quindi si punta il mix su un file già scritto della lunghezza sbagliata.
+    (base / "audio.json").write_text(
+        '{"voice": {"asset": "composition/voice.m4a", "targetLufs": -16},'
+        ' "music": {"asset": "composition/assente.mp3"},'
+        ' "renderedMix": "composition/soundtrack.m4a"}',
+        encoding="utf-8",
+    )
+
+    workspace_under_test = Workspace(root)
+    original = workspace.measured_duration
+
+    def lying(path):
+        # Il mix esce lungo il doppio: è la forma del difetto vero.
+        return original(path) * 2 if path.name == "soundtrack.m4a" else original(path)
+
+    workspace.measured_duration = lying
+    try:
+        with pytest.raises(ValidationError, match="a tempo"):
+            workspace_under_test.build_soundtrack("prova")
+    finally:
+        workspace.measured_duration = original
