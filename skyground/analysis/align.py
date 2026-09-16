@@ -23,6 +23,15 @@ from skyground.analysis.models import Silence, Word
 #: with the transcriber about a consonant, not about a pause.
 MIN_WORD = 0.06
 
+#: Quanto di una parola si lascia *dopo* l'inizio del silenzio misurato. Le
+#: code sonore — il «-go» di «fango», il «-te» di «frustrante» — scendono sotto
+#: la soglia del rilevatore prima di finire davvero: tagliare esattamente dove
+#: il rilevatore tace mozza la parola, e una persona lo ha sentito. Il
+#: rilevatore serve a trovare le parole *stirate* sopra una pausa (una da
+#: undici secondi), non a rifilare le finali; due decimi di silenzio in più
+#: non costano niente e la parola arriva intera.
+TAIL = 0.20
+
 
 def _overlapping(silences: list[Silence], start: float, end: float) -> list[Silence]:
     return [s for s in silences if s.end > start and s.start < end]
@@ -46,7 +55,7 @@ def clamp_words(words: list[Word], silences: list[Silence]) -> list[Word]:
             if silence.start <= start and silence.end >= end:
                 break  # wholly inside a silence: leave the word as heard
             if silence.start > start:
-                end = min(end, silence.start)
+                end = min(end, silence.start + TAIL)
             elif silence.end < end:
                 start = max(start, silence.end)
         if end - start < MIN_WORD:

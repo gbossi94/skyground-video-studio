@@ -33,20 +33,24 @@ from skyground.analysis.cut import ENGINE, CutPolicy, _build_segments, _classify
 from skyground.analysis.models import Analysis, CutPlan, Option, Question, Word
 from skyground.errors import ConfigurationError
 
-#: Air the editor leaves at a join. Two tenths of a second is a breath between
-#: sentences; the old 0.40 read as a hole, and a person said so.
+#: The air the editor leaves. A join is four tenths of a second — a clause
+#: pause, the length a speaker takes between two sentences — and a pause the
+#: speaker made is left alone up to nearly that, so the rhythm stays theirs.
+#: The first version squeezed every join to 0.20s and split every pause over
+#: 0.40: three natural pauses in a row came out as a burst of machine-gun
+#: cuts, and a lead-out of 0.14 clipped the tails of words. Both were heard.
 EDITOR_POLICY = CutPolicy(
-    max_pause=0.40,
+    max_pause=0.45,
     keep_pause=0.18,
-    lead_in=0.06,
-    lead_out=0.14,
+    lead_in=0.10,
+    lead_out=0.30,
     min_segment=0.35,
     rhetorical_pause=99.0,  # no pause is called deliberate by a number
     ask_when_unsure=False,
 )
 
 #: A gap this long in the result is a hole, and goes to the reviewer.
-HOLE = 0.45
+HOLE = 0.50
 #: Five words in a row said twice is content said twice, unless it is a refrain
 #: — which is for the reviewer to say, not for a number.
 REPEAT = 5

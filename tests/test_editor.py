@@ -296,8 +296,12 @@ def test_the_plan_round_trips_through_json():
     assert [s.first_word for s in again.segments] == [s.first_word for s in plan.segments]
 
 
-def test_the_editor_policy_leaves_a_breath_not_a_hole():
-    """The old policy padded every join with 0.40s of air; a person said the
-    film had holes in it. A join is now a fifth of a second."""
-    assert editor.EDITOR_POLICY.lead_in + editor.EDITOR_POLICY.lead_out <= 0.25
+def test_the_editor_policy_keeps_the_speakers_rhythm():
+    """A join is a clause pause, not a hole and not a snap: the first version
+    squeezed every join to 0.20s and split every pause over 0.40, and three
+    natural pauses in a row came out as machine-gun cuts. And the lead-out has
+    to be long enough that the last syllable of a word is never clipped."""
+    join = editor.EDITOR_POLICY.lead_in + editor.EDITOR_POLICY.lead_out
+    assert 0.35 <= join <= editor.HOLE
     assert editor.EDITOR_POLICY.max_pause <= editor.HOLE
+    assert editor.EDITOR_POLICY.lead_out >= 0.25

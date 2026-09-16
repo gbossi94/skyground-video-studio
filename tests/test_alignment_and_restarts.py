@@ -14,6 +14,8 @@ These tests pin both, and the harness that measures them.
 
 from __future__ import annotations
 
+import pytest
+
 from skyground.analysis import align, evaluation, takes
 from skyground.analysis.cut import CutPolicy, plan_cut
 from skyground.analysis.models import Analysis, Silence, Word
@@ -34,10 +36,11 @@ def test_a_word_stretched_over_a_pause_is_trimmed_at_the_silence():
 
     corrected = align.clamp_words(words, silences)
 
-    assert corrected[0].end == 3.4
+    # Back to where the speech stopped, plus the decay of the last syllable.
+    assert corrected[0].end == pytest.approx(3.4 + align.TAIL)
     assert corrected[1].t == 12.6  # untouched: it sits outside the silence
     # And now the gap between them is visible to anything looking for one.
-    assert corrected[1].t - corrected[0].end > 9
+    assert corrected[1].t - corrected[0].end > 8.5
 
 
 def test_a_word_wholly_inside_a_silence_is_left_alone():
@@ -253,3 +256,20 @@ def test_preparing_twice_changes_nothing():
     once = align.prepare(_stumbling_take())
     twice = align.prepare(once)
     assert once.words == twice.words
+
+
+def test_a_words_tail_survives_the_silence_detector():
+    """«fango.» ends at 9.78 by the transcriber; the detector hears silence
+    from 9.21, because the «-go» decays below its threshold. Cutting at 9.21
+    mozzava la parola — a person heard it. The decay is kept."""
+    words = words_from([("fango.", 8.9, 9.78)])
+    corrected = align.clamp_words(words, [Silence(9.21, 14.0)])
+    assert corrected[0].end == pytest.approx(9.21 + align.TAIL)
+
+
+def test_a_word_stretched_over_a_pause_is_still_trimmed():
+    """The case the clamp exists for is untouched by the tail: an eleven
+    second word still comes back to where the speech stopped, plus a breath."""
+    words = words_from([("stai", 1.0, 12.6), ("letteralmente", 12.6, 13.0)])
+    corrected = align.clamp_words(words, [Silence(3.4, 12.0)])
+    assert corrected[0].end == pytest.approx(3.4 + align.TAIL)
