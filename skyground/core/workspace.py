@@ -141,6 +141,54 @@ def _refuse_drift(path: pathlib.Path, fps: int, *, allowance: float = 0.5) -> No
         )
 
 
+def _ffpath(path: pathlib.Path) -> str:
+    """A path inside an ffmpeg filter option: colons and quotes escaped."""
+    return str(path).replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+
+
+def _ass_time(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    hours, rest = divmod(seconds, 3600)
+    minutes, rest = divmod(rest, 60)
+    return f"{int(hours)}:{int(minutes):02d}:{rest:05.2f}"
+
+
+def _ass(groups: list[list[dict]], width: int, height: int, duration: float) -> str:
+    """The captions as the neutral composition would have shown them.
+
+    Same grouping as `sync`, same place on the canvas (the template's `.cap`
+    sits with its top at 1570 of 1920), white with a shadow so it reads on any
+    footage. One line at a time; a line ends where the next one begins.
+    """
+    margin_bottom = max(20, height - 1570 - 75)
+    lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {width}",
+        f"PlayResY: {height}",
+        "WrapStyle: 0",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
+        "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: Cap,Jakarta,63,&H00FFFFFF,&H00FFFFFF,&H80000000,&HA0000000,-1,0,0,0,100,100,0,0,1,2,3,2,60,60,{margin_bottom},1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    for index, group in enumerate(groups):
+        start = max(0.0, float(group[0]["t"]) - 0.035)
+        end = min(float(group[-1]["end"]) + 0.055, duration)
+        if index + 1 < len(groups):
+            end = min(end, float(groups[index + 1][0]["t"]) - 0.04)
+        if end <= start:
+            continue
+        text = " ".join(str(word["s"]) for word in group).replace("{", "(").replace("}", ")")
+        lines.append(f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Cap,,0,0,0,,{text}")
+    return "\n".join(lines) + "\n"
+
+
 def caption_groups(
     words: list[dict], cards: list[dict], duration: float, *, captions_from: float = 0.0
 ) -> list[list[dict]]:
@@ -861,6 +909,76 @@ class Workspace:
             candidate = directory / f"{project_id}-{version}-{suffix}.mp4"
         return candidate
 
+    def is_plain(self, project_id: str) -> bool:
+        """Whether the film is picture, captions and a mark — and nothing that
+        needs a browser to draw.
+
+        The neutral composition declares it (`data-plain-render` on `#main`),
+        and it holds only while the project has no motion graphics and no
+        inserts: the first card somebody adds sends the film back to the
+        browser renderer, which is the only thing that can draw it.
+        """
+        base = self.project_dir(project_id)
+        html = (base / read_json(base / "project.json")["files"]["composition"]).read_text(encoding="utf-8")
+        if 'data-plain-render="1"' not in html:
+            return False
+        if read_json(base / "cards.json"):
+            return False
+        return not any(angle.get("enabled") for angle in read_json(base / "angles.json"))
+
+    def render_plain(self, project_id: str, output: pathlib.Path) -> pathlib.Path:
+        """The film without a browser: ffmpeg burns what the neutral
+        composition would have drawn.
+
+        In production the browser renderer captured 3,475 frames at 1080×1920
+        one screenshot at a time, in two gigabytes, at a tenth of a frame per
+        second — hours for two minutes of film. For a film that is the picture,
+        the captions, a mark and a progress bar, that machinery draws nothing
+        ffmpeg cannot draw in a couple of minutes, and the result is the same
+        picture and the same sound, because both were already rendered by
+        `build_source`.
+        """
+        base = self.project_dir(project_id)
+        composition = base / "composition"
+        project = read_json(base / "project.json")
+        canvas = project["canvas"]
+        width, height, fps = int(canvas["width"]), int(canvas["height"]), int(canvas.get("fps", 30))
+        duration = float(canvas["duration"])
+        brand = read_json(base / "brand.json") if (base / "brand.json").exists() else {}
+        accent = str(brand.get("colors", {}).get("accent") or brand.get("colors", {}).get("primary") or "#5c0bfe")
+
+        captions = read_json(base / "captions.json")
+        groups = caption_groups(captions, [], duration)
+        subtitles = composition / "captions.ass"
+        subtitles.write_text(_ass(groups, width, height, duration), encoding="utf-8")
+
+        font = composition / "sans.ttf"
+        mark = str(brand.get("name") or "SKYGROUND").upper().replace("'", "")
+        filters = [
+            # The film is the canvas, whatever the footage is: cover it and
+            # crop, as the template's `object-fit: cover` does. The test
+            # footage is 270×480 and came out 270×480 before this line.
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}",
+            f"subtitles='{_ffpath(subtitles)}':fontsdir='{_ffpath(composition)}'",
+            # The mark, top left, as the template places it.
+            f"drawtext=fontfile='{_ffpath(font)}':text='{mark}':x=64:y=65:fontsize=23:fontcolor=white"
+            ":shadowcolor=black@0.5:shadowx=0:shadowy=2",
+            # The progress bar along the bottom edge, growing with time.
+            f"drawbox=x=0:y={height - 10}:w='{width}*t/{duration:.6f}':h=10:color={accent}:t=fill",
+        ]
+        ffmpeg = find_ffmpeg()
+        subprocess.run(
+            [ffmpeg, "-y", "-v", "error",
+             "-i", str(composition / "source.mp4"), "-i", str(composition / "soundtrack.m4a"),
+             "-map", "0:v:0", "-map", "1:a:0",
+             "-vf", ",".join(filters), "-r", str(fps),
+             "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+             "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-ac", "2",
+             "-t", f"{duration:.6f}", "-movflags", "+faststart", str(output)],
+            check=True,
+        )
+        return output
+
     def render(self, project_id: str, output: pathlib.Path | None = None) -> pathlib.Path:
         base = self.project_dir(project_id)
         problems = self.validate(project_id)
@@ -877,6 +995,14 @@ class Workspace:
             _refuse_drift(built, fps, allowance=1.0)
         output = pathlib.Path(output) if output else self.render_output_path(project_id)
         output.parent.mkdir(parents=True, exist_ok=True)
+        if self.is_plain(project_id):
+            self.render_plain(project_id, output)
+            subprocess.run(
+                [find_ffmpeg(), "-v", "error", "-i", str(output), "-f", "null", "-"], check=True
+            )
+            _refuse_drift(output, fps, allowance=1.0)
+            shutil.copyfile(output, output.parent / "latest.mp4")
+            return output
         # The renderer is a dependency of *this repository*, not of the project
         # being rendered: resolved from here, whatever the working directory.
         # `npx --no-install` run inside a project on another disk found no

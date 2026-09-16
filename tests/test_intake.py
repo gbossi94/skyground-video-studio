@@ -198,3 +198,66 @@ def test_a_project_is_created_from_the_video_in_one_request(client, sign_in, mak
     queued = client.post("/api/projects/nuovo-05/cut/full", json={"render": False})
     assert queued.status_code == 200, queued.text
     assert queued.json()["kind"] == "full"
+
+
+# ------------------------------------------------------------ render veloce
+
+
+def test_a_plain_film_is_recognised_and_a_card_takes_it_back_to_the_browser(tmp_path):
+    ws = Workspace(tmp_path)
+    ws.create_project("nuovo-06", "Nuovo", make_video(tmp_path / "girato"))
+    assert ws.is_plain("nuovo-06") is True
+
+    base = tmp_path / "projects" / "nuovo-06"
+    (base / "cards.json").write_text('[{"id": "x", "a": 1.0, "b": 2.0, "label": "X", "body": "x", "kind": "split"}]')
+    assert ws.is_plain("nuovo-06") is False
+
+
+def test_the_hand_made_composition_is_never_plain(workspace):
+    """It has the intro scenes, the angles, the cards: only a browser draws it."""
+    assert workspace.is_plain("beauty-centers-growth-01") is False
+
+
+def test_captions_are_written_as_subtitles_where_the_template_puts_them():
+    from skyground.core.workspace import _ass
+
+    groups = [[{"t": 1.0, "end": 1.3, "s": "ciao"}, {"t": 1.3, "end": 1.6, "s": "a"}],
+              [{"t": 1.6, "end": 2.0, "s": "tutti"}]]
+    text = _ass(groups, 1080, 1920, 10.0)
+    assert "PlayResY: 1920" in text
+    assert "Dialogue: 0,0:00:00.96,0:00:01.56,Cap,,0,0,0,,ciao a" in text  # ends where the next begins
+    assert "tutti" in text
+    assert "Fontsize" in text.split("\n")[7] and ",63," in text  # the template's 63px
+
+
+@needs_ffmpeg
+def test_a_plain_film_renders_with_ffmpeg_in_seconds(tmp_path):
+    """The whole point: no browser, no screenshots, the same picture and the
+    same sound that `build_source` already rendered — with the captions, the
+    mark and the bar burned in."""
+    import time
+
+    ws = Workspace(tmp_path)
+    ws.create_project("nuovo-07", "Nuovo", make_video(tmp_path / "girato"))
+    base = tmp_path / "projects" / "nuovo-07"
+    (base / "captions.json").write_text(json.dumps([
+        {"t": 0.5, "end": 0.9, "s": "Buongiorno"}, {"t": 0.9, "end": 1.2, "s": "a"}, {"t": 1.2, "end": 1.6, "s": "tutti"}]))
+    ws.build_source("nuovo-07")
+    ws.sync("nuovo-07")
+
+    started = time.monotonic()
+    output = ws.render("nuovo-07")
+
+    assert time.monotonic() - started < 120
+    assert output.exists() and (base / "renders" / "latest.mp4").exists()
+    from skyground.core.workspace import stream_durations
+
+    video, audio = stream_durations(output)
+    assert video == pytest.approx(6.0, abs=1 / 30) and abs(video - audio) < 1 / 30
+    probe = subprocess.run(
+        [shutil.which("ffprobe"), "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0", str(output)],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert probe == "1080,1920"
+    assert (base / "composition" / "captions.ass").exists()
