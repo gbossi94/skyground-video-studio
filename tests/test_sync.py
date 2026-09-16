@@ -289,3 +289,39 @@ def test_a_mix_that_does_not_match_the_picture_is_refused(tmp_path):
             workspace_under_test.build_soundtrack("prova")
     finally:
         workspace.measured_duration = original
+
+
+@needs_ffmpeg
+def test_a_29_97_fps_source_still_yields_whole_frames(tmp_path):
+    """The production footage is 29.97 fps. After a seek its first frame is
+    not at zero, and `fps=30` counting from there produced 137 frames where
+    138 were asked for — 33 ms of drift, caught by the guard on the first
+    unattended run. The timestamps are reset before the filter."""
+    lungo = tmp_path / "girato.mp4"
+    subprocess.run(
+        [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", "testsrc=size=160x120:rate=30000/1001:duration=12",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=12",
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", "-shortest", str(lungo)],
+        check=True,
+    )
+    frames, start = 138, 4.575
+    length = frames / 30
+    pezzo = tmp_path / "pezzo.mov"
+    subprocess.run(
+        [FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
+         "-ss", f"{start:.6f}", "-i", str(lungo),
+         "-vf", "setpts=PTS-STARTPTS,fps=30", "-frames:v", str(frames),
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+         "-video_track_timescale", "30000",
+         "-af", f"aresample=48000,asetpts=PTS-STARTPTS,apad,atrim=end={length:.6f}",
+         "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2", str(pezzo)],
+        check=True,
+    )
+
+    video, audio = workspace.stream_durations(pezzo)
+
+    assert video == pytest.approx(length, abs=1 / 600)
+    assert audio == pytest.approx(length, abs=1 / 600)
+    workspace._refuse_drift(pezzo, 30)

@@ -699,15 +699,21 @@ class Workspace:
                 subprocess.run(
                     [ffmpeg, "-y", "-v", "error",
                      "-ss", f"{start:.6f}", "-i", str(raw),
-                     "-vf", f"fps={fps}", "-frames:v", str(frames),
+                     # `setpts` prima di `fps`: dopo un seek il primo fotogramma
+                     # decodificato non cade a zero — su un girato a 29,97 fps
+                     # cadeva a due centesimi — e il filtro contava da lì,
+                     # producendo un fotogramma in meno. La guardia sotto lo ha
+                     # preso in produzione, su un pezzo di 138 fotogrammi uscito
+                     # con 137.
+                     "-vf", f"setpts=PTS-STARTPTS,fps={fps}", "-frames:v", str(frames),
                      "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                      "-pix_fmt", "yuv420p", "-video_track_timescale", "30000",
                      # `apad` perché un pezzo che finisce dove finisce il girato
                      # avrebbe meno audio che video, e il silenzio è preferibile
-                     # a uno scarto.
-                     "-af", f"aresample=48000,apad",
+                     # a uno scarto; `atrim` chiude l'audio alla lunghezza
+                     # esatta senza toccare il video, come farebbe `-t`.
+                     "-af", f"aresample=48000,asetpts=PTS-STARTPTS,apad,atrim=end={length:.6f}",
                      "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
-                     "-t", f"{length:.6f}",
                      str(piece)],
                     check=True,
                 )
