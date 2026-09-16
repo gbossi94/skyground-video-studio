@@ -402,3 +402,29 @@ def test_build_model_can_be_overridden_for_one_run():
     assert isinstance(editor.build_model(settings), editor.ClaudeModel)
     other = editor.build_model(settings, {"provider": "openai", "model": "gpt-6"})
     assert isinstance(other, editor.OpenAIModel) and other.model == "gpt-6"
+
+
+def test_an_unknown_openai_model_names_the_ones_the_key_can_use():
+    """A 404 from OpenAI used to cross the server as a bare 500. Now it says
+    which models the key can call — the newest model's exact name is the one
+    thing nobody remembers correctly."""
+    from skyground.errors import ConfigurationError
+
+    class Models:
+        @staticmethod
+        def list():
+            class M:
+                def __init__(self, i): self.id = i
+            return [M("gpt-5.4"), M("gpt-5.4-mini"), M("text-embedding-3"), M("gpt-6-preview")]
+
+    class Responses:
+        @staticmethod
+        def create(**kwargs):
+            raise RuntimeError("Error code: 404 - {'error': {'code': 'model_not_found', 'message': 'The model `gpt-6` does not exist'}}")
+
+    class Client:
+        responses = Responses()
+        models = Models()
+
+    with pytest.raises(ConfigurationError, match="gpt-6-preview"):
+        editor.OpenAIModel("", model="gpt-6", client=Client()).ask("s", "u", editor.DECIDE_SCHEMA)

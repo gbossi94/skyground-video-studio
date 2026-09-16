@@ -268,6 +268,15 @@ class OpenAIModel:
         self._client = OpenAI(api_key=self.api_key)
         return self._client
 
+    @staticmethod
+    def available(client) -> list[str]:
+        """The GPT-family model ids this key can call, newest first."""
+        try:
+            ids = [m.id for m in client.models.list()]
+        except Exception:
+            return []
+        return sorted((i for i in ids if i.startswith(("gpt", "o"))), reverse=True)[:20]
+
     def ask(self, system: str, user: str, schema: dict) -> dict:
         client = self._sdk()
         request = dict(
@@ -277,13 +286,26 @@ class OpenAIModel:
             text={"format": {"type": "json_schema", "name": "montaggio", "schema": schema, "strict": True}},
         )
         try:
-            response = client.responses.create(reasoning={"effort": "high"}, **request)
+            try:
+                response = client.responses.create(reasoning={"effort": "high"}, **request)
+            except Exception as error:
+                # A model without a reasoning dial rejects the parameter; ask
+                # again without it rather than guess which models have one.
+                if "reasoning" not in str(error).lower() or "not_found" in str(error).lower():
+                    raise
+                response = client.responses.create(**request)
         except Exception as error:
-            # A model without a reasoning dial rejects the parameter; ask
-            # again without it rather than guess which models have one.
-            if "reasoning" not in str(error).lower():
-                raise
-            response = client.responses.create(**request)
+            if "model_not_found" in str(error) or "does not exist" in str(error):
+                # Say which models this key *can* use, instead of a bare 500:
+                # the name of the newest model is exactly the thing nobody
+                # remembers correctly.
+                raise ConfigurationError(
+                    f"il modello «{self.model}» non esiste per questa chiave OpenAI; "
+                    f"disponibili: {', '.join(self.available(client)) or 'nessuno elencato'}"
+                ) from error
+            if error.__class__.__module__.startswith("openai"):
+                raise ConfigurationError(f"OpenAI: {str(error)[:300]}") from error
+            raise
         self.served_by = getattr(response, "model", None) or self.model
         incomplete = getattr(response, "incomplete_details", None)
         if incomplete is not None:
