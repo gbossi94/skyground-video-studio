@@ -190,7 +190,7 @@ class ClaudeModel:
     error, never prose to parse.
     """
 
-    def __init__(self, api_key: str, *, model: str = "claude-fable-5-1"):
+    def __init__(self, api_key: str, *, model: str = "claude-opus-5"):
         if not api_key:
             raise ConfigurationError("SKYGROUND_ADVISER_API_KEY non configurata")
         self.api_key = api_key

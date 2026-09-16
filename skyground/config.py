@@ -119,7 +119,12 @@ class Settings:
     #: `heuristic` engine — string similarity and hand-tuned scores — is kept
     #: only for a studio without a key, and for the record of what it got wrong.
     cut_engine: str = "editor"
-    editor_model: str = "claude-fable-5-1"
+    #: Opus 5 by default. Fable 5.1 edits at least as well, but its safety
+    #: classifier declined this very footage — a numbered transcript of a
+    #: person talking about beauty salons, read as an attempt to duplicate
+    #: model outputs — and a product cannot depend on a refusal it does not
+    #: control. `SKYGROUND_EDITOR_MODEL=claude-fable-5-1` opts back in.
+    editor_model: str = "claude-opus-5"
     worker_poll_seconds: float = 2.0
     worker_job_timeout_seconds: int = 3600
     #: False when `secret_key` is the derived development key rather than a
@@ -233,7 +238,7 @@ def load_settings(environ: dict | None = None) -> Settings:
         adviser_model=_env("SKYGROUND_ADVISER_MODEL", "claude-opus-5") or "claude-opus-5",
         adviser_api_key=_env("SKYGROUND_ADVISER_API_KEY", "") or "",
         cut_engine=(_env("SKYGROUND_CUT_ENGINE", "editor") or "editor").strip().lower(),
-        editor_model=_env("SKYGROUND_EDITOR_MODEL", "claude-fable-5-1") or "claude-fable-5-1",
+        editor_model=_env("SKYGROUND_EDITOR_MODEL", "claude-opus-5") or "claude-opus-5",
         worker_poll_seconds=float(_env("SKYGROUND_WORKER_POLL_SECONDS", "2") or 2),
         worker_job_timeout_seconds=_int("SKYGROUND_WORKER_JOB_TIMEOUT_SECONDS", 3600),
         secret_key_is_explicit=secret_is_explicit,
