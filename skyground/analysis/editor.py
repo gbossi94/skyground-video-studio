@@ -240,6 +240,58 @@ class ClaudeModel:
         return json.loads(text or "{}")
 
 
+class OpenAIModel:
+    """The same job through OpenAI's Responses API.
+
+    The editor never cared which model answers — it asks one question, in one
+    shape, and reads JSON back. So a second provider is this class and nothing
+    else, and two models can edit the same footage to be compared on the
+    result rather than on reputation.
+    """
+
+    def __init__(self, api_key: str, *, model: str = "gpt-6", client=None):
+        if not api_key and client is None:
+            raise ConfigurationError("SKYGROUND_OPENAI_API_KEY non configurata")
+        self.api_key = api_key
+        self.model = model
+        self.name = model
+        self.served_by: str | None = None
+        self._client = client
+
+    def _sdk(self):
+        if self._client is not None:
+            return self._client
+        try:
+            from openai import OpenAI
+        except ImportError as error:  # pragma: no cover - optional extra
+            raise ConfigurationError("montatore OpenAI selezionato ma il pacchetto openai non è installato") from error
+        self._client = OpenAI(api_key=self.api_key)
+        return self._client
+
+    def ask(self, system: str, user: str, schema: dict) -> dict:
+        client = self._sdk()
+        request = dict(
+            model=self.model,
+            instructions=system,
+            input=user,
+            text={"format": {"type": "json_schema", "name": "montaggio", "schema": schema, "strict": True}},
+        )
+        try:
+            response = client.responses.create(reasoning={"effort": "high"}, **request)
+        except Exception as error:
+            # A model without a reasoning dial rejects the parameter; ask
+            # again without it rather than guess which models have one.
+            if "reasoning" not in str(error).lower():
+                raise
+            response = client.responses.create(**request)
+        self.served_by = getattr(response, "model", None) or self.model
+        incomplete = getattr(response, "incomplete_details", None)
+        if incomplete is not None:
+            raise ConfigurationError(f"la risposta del modello è incompleta: {getattr(incomplete, 'reason', incomplete)}")
+        text = getattr(response, "output_text", "") or ""
+        return json.loads(text or "{}")
+
+
 # ------------------------------------------------------------ the decision
 
 
@@ -676,14 +728,26 @@ def _questions(edit: Edit, words: list[Word], decisions: dict[str, str]) -> list
     return questions
 
 
-def build_model(settings=None) -> Model | None:
-    """The configured model, or None when the studio has no key."""
+def build_model(settings=None, override: dict | None = None) -> Model | None:
+    """The configured model, or None when the studio has no key.
+
+    `override` — `{"provider": ..., "model": ...}` from a request — picks a
+    different editor for one run, which is how two models get compared on the
+    same footage without flipping the studio's default.
+    """
     from skyground.config import get_settings
 
     settings = settings or get_settings()
-    provider = (settings.adviser_provider or "none").strip().lower()
+    override = override or {}
+    provider = str(override.get("provider") or settings.editor_provider or "claude").strip().lower()
     if provider in ("none", "", "off"):
         return None
     if provider in ("claude", "anthropic"):
-        return ClaudeModel(settings.adviser_api_key or "", model=settings.editor_model)
-    raise ConfigurationError(f"modello sconosciuto: {provider}")
+        if (settings.adviser_provider or "none").strip().lower() in ("none", "", "off") and not override:
+            return None
+        model = str(override.get("model") or (settings.editor_model if settings.editor_provider in ("claude", "anthropic") else "claude-opus-5"))
+        return ClaudeModel(settings.adviser_api_key or "", model=model)
+    if provider in ("openai", "gpt"):
+        model = str(override.get("model") or (settings.editor_model if settings.editor_provider == "openai" else "gpt-6"))
+        return OpenAIModel(settings.openai_api_key or "", model=model)
+    raise ConfigurationError(f"montatore sconosciuto: {provider}")

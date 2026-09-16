@@ -119,6 +119,10 @@ class Settings:
     #: `heuristic` engine — string similarity and hand-tuned scores — is kept
     #: only for a studio without a key, and for the record of what it got wrong.
     cut_engine: str = "editor"
+    #: Who edits: `claude` (the adviser key) or `openai`. A request may override
+    #: it for one run, to compare two editors on the same footage.
+    editor_provider: str = "claude"
+    openai_api_key: str = ""
     #: Opus 5 by default. Fable 5.1 edits at least as well, but its safety
     #: classifier declined this very footage — a numbered transcript of a
     #: person talking about beauty salons, read as an attempt to duplicate
@@ -238,6 +242,8 @@ def load_settings(environ: dict | None = None) -> Settings:
         adviser_model=_env("SKYGROUND_ADVISER_MODEL", "claude-opus-5") or "claude-opus-5",
         adviser_api_key=_env("SKYGROUND_ADVISER_API_KEY", "") or "",
         cut_engine=(_env("SKYGROUND_CUT_ENGINE", "editor") or "editor").strip().lower(),
+        editor_provider=(_env("SKYGROUND_EDITOR_PROVIDER", "claude") or "claude").strip().lower(),
+        openai_api_key=_env("SKYGROUND_OPENAI_API_KEY", "") or "",
         editor_model=_env("SKYGROUND_EDITOR_MODEL", "claude-opus-5") or "claude-opus-5",
         worker_poll_seconds=float(_env("SKYGROUND_WORKER_POLL_SECONDS", "2") or 2),
         worker_job_timeout_seconds=_int("SKYGROUND_WORKER_JOB_TIMEOUT_SECONDS", 3600),

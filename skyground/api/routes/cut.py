@@ -21,11 +21,11 @@ from skyground.storage import ObjectStorage
 router = APIRouter()
 
 
-def _editor_model(settings: Settings):
+def _editor_model(settings: Settings, override: dict | None = None):
     """The model that edits, when the studio is set to let one."""
     if settings.cut_engine != "editor":
         return None
-    return build_model(settings)
+    return build_model(settings, override)
 
 
 @router.get("/api/projects/{slug}/cut")
@@ -102,7 +102,7 @@ def propose(
         context.project,
         actor=context.user,
         adviser=build_adviser(settings),
-        model=_editor_model(settings),
+        model=_editor_model(settings, (payload or {}).get("editor")),
         keep_answers=bool((payload or {}).get("keepAnswers", True)),
     )
     return {"state": plan.status, "plan": plan.as_dict()}

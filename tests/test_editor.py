@@ -305,3 +305,100 @@ def test_the_editor_policy_keeps_the_speakers_rhythm():
     assert 0.35 <= join <= editor.HOLE
     assert editor.EDITOR_POLICY.max_pause <= editor.HOLE
     assert editor.EDITOR_POLICY.lead_out >= 0.25
+
+
+# ------------------------------------------------------------ a second model
+
+
+
+    def __post_init__(self):
+        pass
+
+
+def _fake_client(text: str, *, reject_reasoning: bool = False):
+    calls: list[dict] = []
+
+    class Responses:
+        @staticmethod
+        def create(**kwargs):
+            calls.append(kwargs)
+            if reject_reasoning and "reasoning" in kwargs:
+                raise RuntimeError("Unsupported parameter: 'reasoning' is not supported with this model.")
+
+            class Response:
+                model = kwargs["model"] + "-2026-09-01"
+                output_text = text
+                incomplete_details = None
+
+            return Response()
+
+    class Client:
+        responses = Responses()
+
+    return Client(), calls
+
+
+def test_the_openai_editor_asks_the_same_question_in_the_same_shape():
+    client, calls = _fake_client('{"segments": [], "summary": "vuoto"}')
+    model = editor.OpenAIModel("", model="gpt-6", client=client)
+
+    answer = model.ask("sistema", "0:ciao", editor.DECIDE_SCHEMA)
+
+    assert answer == {"segments": [], "summary": "vuoto"}
+    sent = calls[0]
+    assert sent["model"] == "gpt-6"
+    assert sent["instructions"] == "sistema" and sent["input"] == "0:ciao"
+    assert sent["text"]["format"]["schema"] is editor.DECIDE_SCHEMA
+    assert sent["text"]["format"]["strict"] is True
+    assert model.served_by == "gpt-6-2026-09-01"
+
+
+def test_a_model_without_a_reasoning_dial_is_asked_again_without_it():
+    client, calls = _fake_client('{"verdict": "ok", "revisions": [], "notes": ""}', reject_reasoning=True)
+    model = editor.OpenAIModel("", model="gpt-6", client=client)
+
+    model.ask("s", "u", editor.REVIEW_SCHEMA)
+
+    assert "reasoning" in calls[0] and "reasoning" not in calls[1]
+
+
+def test_the_openai_editor_drives_the_same_pipeline():
+    analysis = analysis_of(OPENING)
+    import json as _json
+
+    answers = [_json.dumps(_first_attempt_cut(analysis)), _json.dumps(OK)]
+    calls: list[dict] = []
+
+    class Responses:
+        @staticmethod
+        def create(**kwargs):
+            calls.append(kwargs)
+
+            class Response:
+                model = "gpt-6"
+                output_text = answers.pop(0)
+                incomplete_details = None
+
+            return Response()
+
+    class Client:
+        responses = Responses()
+
+    plan = pipeline.propose(analysis, model=editor.OpenAIModel("", client=Client()))
+
+    assert plan.editor["model"] == "gpt-6"
+    assert plan.segments[0].first_word == len(OPENING[0].split())
+    assert len(calls) == 2
+
+
+def test_build_model_can_be_overridden_for_one_run():
+    from dataclasses import replace
+
+    from skyground.config import Settings, get_settings
+
+    base = get_settings()
+    settings = replace(base, adviser_provider="claude", adviser_api_key="k", openai_api_key="o",
+                       editor_provider="claude", editor_model="claude-opus-5")
+    assert isinstance(editor.build_model(settings), editor.ClaudeModel)
+    other = editor.build_model(settings, {"provider": "openai", "model": "gpt-6"})
+    assert isinstance(other, editor.OpenAIModel) and other.model == "gpt-6"

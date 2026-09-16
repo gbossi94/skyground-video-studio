@@ -21,3 +21,4 @@ psycopg[binary]==3.2.3
 pydantic==2.10.6
 SQLAlchemy==2.0.36
 uvicorn[standard]==0.34.0
+\n# Il secondo montatore, per confrontare due modelli sullo stesso girato.\nopenai==2.9.0\n
