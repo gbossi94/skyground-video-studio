@@ -57,8 +57,12 @@ class Sample:
             )
         info = _read(info_path)
         self.meta = _read(meta_path)
+        # The shape of a *real* draft, emptied — not CapCut's `template.tmp`,
+        # which is the empty timeline with its values unset (colour space −1,
+        # a 0×0 canvas, an old version) and made the first draft unopenable.
+        self.skeleton = self._emptied(info)
         template = self.folder / "template.tmp"
-        self.skeleton = _read(template) if template.exists() else self._emptied(info)
+        self.empty_timeline = _read(template) if template.exists() else self.skeleton
         self.platform = info.get("platform") or self.skeleton.get("platform") or {}
         self.config = info.get("config") or self.skeleton.get("config") or {}
         self.version = info.get("version", self.skeleton.get("version"))
@@ -99,13 +103,58 @@ class Sample:
 
     @staticmethod
     def _emptied(info: dict) -> dict:
+        """The sample with everything that was *its* content taken out."""
         skeleton = copy.deepcopy(info)
         skeleton["tracks"] = []
         skeleton["materials"] = {k: [] for k in (info.get("materials") or {})}
-        for key in ("keyframes",):
-            if isinstance(skeleton.get(key), dict):
-                skeleton[key] = {k: [] for k in skeleton[key]}
+        if isinstance(skeleton.get("keyframes"), dict):
+            skeleton["keyframes"] = {k: [] for k in skeleton["keyframes"]}
+        for key in ("relationships", "keyframe_graph_list", "lyrics_effects"):
+            if isinstance(skeleton.get(key), list):
+                skeleton[key] = []
+        extra = skeleton.get("extra_info")
+        if isinstance(extra, dict):
+            skeleton["extra_info"] = {k: ([] if isinstance(v, list) else v) for k, v in extra.items()}
+        config = skeleton.get("config")
+        if isinstance(config, dict):
+            for key in ("subtitle_taskinfo", "lyrics_taskinfo", "attachment_info"):
+                if isinstance(config.get(key), list):
+                    config[key] = []
+            for key in ("subtitle_recognition_id", "lyrics_recognition_id"):
+                if key in config:
+                    config[key] = ""
+        skeleton["group_container"] = None
+        skeleton["time_marks"] = None
         return skeleton
+
+    def companions(self) -> dict[str, bytes]:
+        """Every file of the sample folder that is not the draft itself, the
+        cover or media, by relative path: CapCut's own attachments, its binary
+        `draft.extra`, copied as they are. Nothing in them names the content."""
+        skip = {"draft_info.json", "draft_info.json.bak", "template.tmp", "template-2.tmp", "draft_meta_info.json",
+                "draft_settings", "draft_cover.jpg", "key_value.json", "timeline_layout.json", "draft_biz_config.json",
+                "draft_virtual_store.json", "draft_agency_config.json", "performance_opt_info.json", ".locked",
+                "attachment_id_mapping.json", "patch.json", "mini_draft.json"}
+        media = {".mov", ".mp4", ".m4a", ".mp3", ".wav", ".png", ".jpeg", ".jpg", ".zip"}
+        found: dict[str, bytes] = {}
+        for path in sorted(self.folder.rglob("*")):
+            if not path.is_file() or path.name in skip or path.suffix.lower() in media:
+                continue
+            if path.stat().st_size > 4_000_000:
+                continue
+            relative = path.relative_to(self.folder).as_posix()
+            if relative.startswith("Timelines/"):
+                continue  # mirrored from the root by `write`
+            found[relative] = path.read_bytes()
+        return found
+
+    def timeline_files(self) -> list[str]:
+        """What the sample keeps under `Timelines/<id>/`, by relative name."""
+        folders = [p for p in (self.folder / "Timelines").glob("*") if p.is_dir()] if (self.folder / "Timelines").exists() else []
+        if not folders:
+            return ["draft_info.json", "draft_info.json.bak", "template.tmp", "template-2.tmp",
+                    "attachment/patch/patch.json"]
+        return sorted(p.relative_to(folders[0]).as_posix() for p in folders[0].rglob("*") if p.is_file())
 
 
 def _text_material(sample: Sample, text: str, words: list[dict], at: float) -> dict:
@@ -181,7 +230,6 @@ def draft(
     info["fps"] = float(fps)
     info["duration"] = 0
     info["platform"] = copy.deepcopy(sample.platform)
-    info["last_modified_platform"] = copy.deepcopy(sample.platform)
     info["config"] = copy.deepcopy(sample.config)
     info["draft_type"] = "video"
     info["name"] = ""
@@ -298,8 +346,16 @@ def write(
     raw = base / read_json(base / project["files"]["timeline"])["source"]
     stamp = round(now if now is not None else time.time())
     dumped = json.dumps(info, ensure_ascii=False)
+    segments = [segment["id"] for track in info["tracks"] for segment in track["segments"]]
+    id_mapping = {"id_mapping": {
+        "mapping": [{"short_id": str(1000 + n), "uuid": uid} for n, uid in enumerate(segments)],
+        "next_index": 1000 + len(segments), "version": "1.0.0",
+    }}
     texts = {
         "draft_info.json": dumped,
+        "draft_info.json.bak": dumped,
+        "template-2.tmp": dumped,
+        "common_attachment/attachment_id_mapping.json": json.dumps(id_mapping),
         "draft_meta_info.json": json.dumps(meta, ensure_ascii=False),
         "draft_settings": f"[General]\ncloud_last_modify_platform=mac\ndraft_create_time={stamp}\n"
                           f"draft_last_edit_time={stamp}\nreal_edit_keys=0\nreal_edit_seconds=0\n",
@@ -316,15 +372,22 @@ def write(
         "performance_opt_info.json": json.dumps({"manual_cancle_precombine_segs": None, "need_auto_precombine_segs": None}),
         "key_value.json": "{}",
         ".locked": "",
-        f"Timelines/{timeline_id}/draft_info.json": dumped,
-        f"Timelines/{timeline_id}/template.tmp": json.dumps(sample.skeleton, ensure_ascii=False),
-        f"Timelines/{timeline_id}/attachment/patch/patch.json": json.dumps({"patch_data": []}),
+        "attachment/patch/patch.json": json.dumps({"patch_data": []}),
         "common_attachment/attachment_pc_timeline.json": json.dumps({"reference_lines_config": {
             "horizontal_lines": [], "is_lock": False, "is_visible": False, "vertical_lines": []}, "safe_area_type": 0}),
     }
-    for extra in ("attachment_pc_common.json", "attachment_editing.json"):
-        if (sample.folder / extra).exists():
-            texts[extra] = (sample.folder / extra).read_text(encoding="utf-8")
+    files: dict[str, bytes] = {name: body.encode("utf-8") for name, body in texts.items()}
+    # CapCut's own companions — attachments, `draft.extra` — as the sample has them.
+    for relative, body in sample.companions().items():
+        files.setdefault(relative, body)
+    files["template.tmp"] = json.dumps(sample.empty_timeline, ensure_ascii=False).encode("utf-8")
+    # The timeline folder mirrors the root, file for file, as CapCut keeps it;
+    # the empty timeline and the patch list live only there.
+    for relative in sample.timeline_files():
+        if relative in files:
+            files[f"Timelines/{timeline_id}/{relative}"] = files[relative]
+    for only_there in ("template.tmp", "attachment/patch/patch.json"):
+        files.pop(only_there, None)
     cover = None
     if ffmpeg:
         cover = io.BytesIO()
@@ -337,7 +400,7 @@ def write(
             cover = None
     target.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
-        for relative, body in texts.items():
+        for relative, body in files.items():
             archive.writestr(f"{name}/{relative}", body)
         if cover is not None and cover.getvalue():
             archive.writestr(f"{name}/draft_cover.jpg", cover.getvalue())

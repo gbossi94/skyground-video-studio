@@ -187,6 +187,53 @@ async def upload_capcut_sample(
     return {"stored": name, "size": len(body), "present": sorted(p.name for p in folder.iterdir())}
 
 
+@router.put("/api/capcut/sample")
+async def upload_capcut_sample_folder(
+    request: Request,
+    user: User = Depends(require_user),
+    workspace: Workspace = Depends(get_workspace),
+) -> dict:
+    """The whole sample draft folder, zipped as CapCut keeps it (a top-level
+    folder with `draft_info.json` inside). Media and anything large stay out;
+    the draft's own attachments and `draft.extra` come in, because CapCut
+    would not open a draft without them."""
+    import io
+    import zipfile
+
+    if not user.is_admin:
+        raise PermissionDenied("solo un amministratore carica la bozza campione di CapCut")
+    body = await request.body()
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(body))
+    except zipfile.BadZipFile as error:
+        raise ValidationError(f"non è uno zip: {error}") from error
+    media = {".mov", ".mp4", ".m4a", ".mp3", ".wav", ".png", ".jpeg"}
+    roots = {n.split("/", 1)[0] for n in archive.namelist() if "/" in n and not n.startswith("__MACOSX")}
+    root = next(iter(roots)) + "/" if len(roots) == 1 else ""
+    folder = workspace.capcut_sample
+    if folder.exists():
+        shutil.rmtree(folder)
+    folder.mkdir(parents=True)
+    stored = []
+    for item in archive.infolist():
+        name = item.filename
+        if item.is_dir() or name.startswith("__MACOSX") or "/._" in f"/{name}":
+            continue
+        relative = name[len(root):] if root and name.startswith(root) else name
+        if not relative or relative.startswith("/") or ".." in relative.split("/"):
+            continue
+        if pathlib.Path(relative).suffix.lower() in media or item.file_size > 4_000_000:
+            continue
+        target = folder / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(archive.read(name))
+        stored.append(relative)
+    ready = {"draft_info.json", "draft_meta_info.json"} <= set(stored)
+    if not ready:
+        raise ValidationError("lo zip non contiene draft_info.json e draft_meta_info.json")
+    return {"stored": len(stored), "ready": ready}
+
+
 @router.get("/api/capcut/sample")
 def capcut_sample_state(
     user: User = Depends(require_user), workspace: Workspace = Depends(get_workspace)
