@@ -13,6 +13,10 @@ Everything else is additive.
 
 from __future__ import annotations
 
+import json
+import pathlib
+import shutil
+
 from fastapi import APIRouter, Body, Depends, Header, Query, Request, Response
 from sqlalchemy.orm import Session
 
@@ -20,13 +24,15 @@ from skyground.api import serializers
 from skyground.api.deps import (
     ProjectContext,
     get_session,
+    get_settings,
     get_workspace,
     project_context,
     require_user,
 )
+from skyground.config import Settings
 from skyground.core.workspace import Workspace
 from skyground.db.models import ROLES, User
-from skyground.errors import NotFound, ValidationError
+from skyground.errors import NotFound, PermissionDenied, ValidationError
 from skyground.services import accounts, audit
 from skyground.services import documents as document_service
 from skyground.services import projects as project_service
@@ -112,13 +118,33 @@ def project_status(context: ProjectContext = Depends(project_context)) -> dict:
 
 
 @router.get("/api/projects/{slug}/export/{kind}")
-def export_cut(kind: str, context: ProjectContext = Depends(project_context)):
+def export_cut(
+    kind: str,
+    root: str = "",
+    context: ProjectContext = Depends(project_context),
+    settings: Settings = Depends(get_settings),
+):
     """The cut for an editor a person already knows: `fcpxml` for DaVinci
     Resolve, Premiere Pro and Final Cut Pro; `srt` for the captions, which
-    every editor — CapCut included — imports as subtitles."""
-    from fastapi.responses import PlainTextResponse
+    every editor — CapCut included — imports as subtitles; `capcut` for a
+    zipped CapCut draft folder, raw footage inside, to unzip into CapCut's
+    drafts folder (`root`, or the studio's `SKYGROUND_CAPCUT_DRAFTS`)."""
+    import tempfile
+
+    from fastapi.responses import FileResponse, PlainTextResponse
+    from starlette.background import BackgroundTask
 
     context.require("document:read")
+    if kind == "capcut":
+        folder = pathlib.Path(tempfile.mkdtemp(prefix="skyground-capcut-"))
+        target = context.workspace.export_capcut(
+            context.project.slug, folder / f"{context.project.slug}-capcut.zip",
+            drafts_root=root or settings.capcut_drafts,
+        )
+        return FileResponse(
+            target, media_type="application/zip", filename=target.name,
+            background=BackgroundTask(shutil.rmtree, folder, ignore_errors=True),
+        )
     if kind == "fcpxml":
         body, media = context.workspace.export_fcpxml(context.project.slug), "application/xml"
     elif kind == "srt":
@@ -130,6 +156,44 @@ def export_cut(kind: str, context: ProjectContext = Depends(project_context)):
         media_type=media,
         headers={"Content-Disposition": f'attachment; filename="{context.project.slug}.{kind}"'},
     )
+
+
+@router.put("/api/capcut/sample/{name}")
+async def upload_capcut_sample(
+    name: str,
+    request: Request,
+    user: User = Depends(require_user),
+    workspace: Workspace = Depends(get_workspace),
+) -> dict:
+    """One file of the sample draft CapCut saved, from which ours take their
+    shape: `draft_info.json`, `draft_meta_info.json`, `template.tmp`, and the
+    two attachment files. Administrators only; it is workspace data."""
+    from skyground.core.capcut import SAMPLE_FILES
+
+    if not user.is_admin:
+        raise PermissionDenied("solo un amministratore carica la bozza campione di CapCut")
+    allowed = SAMPLE_FILES + ("attachment_pc_common.json", "attachment_editing.json")
+    if name not in allowed:
+        raise ValidationError(f"file non previsto: {name} (uno di {', '.join(allowed)})")
+    body = await request.body()
+    if name.endswith(".json") or name == "template.tmp":
+        try:
+            json.loads(body)
+        except ValueError as error:
+            raise ValidationError(f"{name} non è JSON valido: {error}") from error
+    folder = workspace.capcut_sample
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / name).write_bytes(body)
+    return {"stored": name, "size": len(body), "present": sorted(p.name for p in folder.iterdir())}
+
+
+@router.get("/api/capcut/sample")
+def capcut_sample_state(
+    user: User = Depends(require_user), workspace: Workspace = Depends(get_workspace)
+) -> dict:
+    folder = workspace.capcut_sample
+    present = sorted(p.name for p in folder.iterdir()) if folder.exists() else []
+    return {"present": present, "ready": all(f in present for f in ("draft_info.json", "draft_meta_info.json"))}
 
 
 @router.get("/api/projects/{slug}/files/{name}")

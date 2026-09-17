@@ -183,6 +183,14 @@ export default function App() {
           <a className="ghost link small" href={`/api/projects/${project.id}/export/srt`} download title="Sottotitoli SRT">
             SRT
           </a>
+          <a
+            className="ghost link small"
+            href={`/api/projects/${project.id}/export/capcut`}
+            download
+            title="Bozza CapCut (zip con il girato): decomprimila nella cartella delle bozze di CapCut"
+          >
+            CapCut
+          </a>
           <button className="ghost" onClick={() => setCreating(true)}>Nuovo montaggio</button>
           {plan && <Status plan={plan} />}
           <button

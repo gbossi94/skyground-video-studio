@@ -61,7 +61,11 @@ def build_parser() -> argparse.ArgumentParser:
         "export", help="scrive il montaggio per un editor: FCPXML (Resolve, Premiere, Final Cut) e SRT"
     )
     export.add_argument("project")
-    export.add_argument("--format", choices=["fcpxml", "srt", "all"], default="all")
+    export.add_argument("--format", choices=["fcpxml", "srt", "capcut", "all"], default="all")
+    export.add_argument("--capcut-root", default=None,
+                        help="cartella delle bozze di CapCut sul Mac che aprirà la bozza (default SKYGROUND_CAPCUT_DRAFTS)")
+    export.add_argument("--capcut-sample", default=None,
+                        help="cartella di una bozza salvata da CapCut, da cui prendere la forma (default <workspace>/capcut/sample)")
 
     serve = subcommands.add_parser("serve", help="avvia il pannello")
     serve.add_argument("--host", default=None)
@@ -228,9 +232,16 @@ def run_editorial(args, workspace: Workspace) -> int | None:
     if args.command == "evaluate":
         return run_evaluate(args, workspace)
     if args.command == "export":
+        import os
+        import pathlib
+
         kinds = ("fcpxml", "srt") if args.format == "all" else (args.format,)
         for kind in kinds:
-            print(workspace.export(args.project, kind))
+            print(workspace.export(
+                args.project, kind,
+                drafts_root=args.capcut_root or os.environ.get("SKYGROUND_CAPCUT_DRAFTS", ""),
+                sample=pathlib.Path(args.capcut_sample) if args.capcut_sample else None,
+            ))
         return 0
     if args.command == "list":
         for project in workspace.list_projects():

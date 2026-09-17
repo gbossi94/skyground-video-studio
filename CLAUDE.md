@@ -37,7 +37,7 @@ python3 studio.py validate beauty-centers-growth-01
 python3 studio.py sync beauty-centers-growth-01
 python3 studio.py build-source beauty-centers-growth-01
 python3 studio.py render beauty-centers-growth-01
-python3 studio.py export beauty-centers-growth-01   # FCPXML per Resolve/Premiere/Final Cut, SRT dei sottotitoli
+python3 studio.py export beauty-centers-growth-01   # FCPXML per Resolve/Premiere/Final Cut, SRT dei sottotitoli; --format capcut scrive la bozza CapCut (serve una bozza campione)
 python3 studio.py serve
 ```
 

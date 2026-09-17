@@ -129,6 +129,10 @@ class Settings:
     #: model outputs — and a product cannot depend on a refusal it does not
     #: control. `SKYGROUND_EDITOR_MODEL=claude-fable-5-1` opts back in.
     editor_model: str = "claude-opus-5"
+    #: Where CapCut keeps its drafts on the machine that will open ours, e.g.
+    #: `/Users/<nome>/Movies/CapCut/User Data/Projects/com.lveditor.draft`.
+    #: A draft names its own folder by absolute path, so this has to be known.
+    capcut_drafts: str = ""
     worker_poll_seconds: float = 2.0
     worker_job_timeout_seconds: int = 3600
     #: False when `secret_key` is the derived development key rather than a
@@ -245,6 +249,7 @@ def load_settings(environ: dict | None = None) -> Settings:
         editor_provider=(_env("SKYGROUND_EDITOR_PROVIDER", "claude") or "claude").strip().lower(),
         openai_api_key=_env("SKYGROUND_OPENAI_API_KEY", "") or "",
         editor_model=_env("SKYGROUND_EDITOR_MODEL", "claude-opus-5") or "claude-opus-5",
+        capcut_drafts=_env("SKYGROUND_CAPCUT_DRAFTS", "") or "",
         worker_poll_seconds=float(_env("SKYGROUND_WORKER_POLL_SECONDS", "2") or 2),
         worker_job_timeout_seconds=_int("SKYGROUND_WORKER_JOB_TIMEOUT_SECONDS", 3600),
         secret_key_is_explicit=secret_is_explicit,

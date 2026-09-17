@@ -990,12 +990,38 @@ class Workspace:
 
         return export.srt(self.project_dir(project_id), read_json=read_json, caption_groups=caption_groups)
 
-    def export(self, project_id: str, kind: str) -> pathlib.Path:
+    @property
+    def capcut_sample(self) -> pathlib.Path:
+        """The draft CapCut itself saved, from which ours take their shape.
+        Workspace data, uploaded once, never in the repository."""
+        return self.root / "capcut" / "sample"
+
+    def export_capcut(
+        self, project_id: str, target: pathlib.Path, *, drafts_root: str, sample: pathlib.Path | None = None
+    ) -> pathlib.Path:
+        """The cut as a CapCut draft folder, zipped, with the raw footage inside."""
+        from skyground.core import capcut
+
+        if not drafts_root:
+            raise ValidationError(
+                "serve la cartella delle bozze di CapCut sulla macchina che aprirà la bozza "
+                "(SKYGROUND_CAPCUT_DRAFTS, o il parametro root)"
+            )
+        project = read_json(self.project_dir(project_id) / "project.json")
+        return capcut.write(
+            self.project_dir(project_id), project.get("name") or project_id, target,
+            sample=capcut.Sample(sample or self.capcut_sample), drafts_root=drafts_root,
+            read_json=read_json, caption_groups=caption_groups, ffmpeg=find_ffmpeg(),
+        )
+
+    def export(self, project_id: str, kind: str, *, drafts_root: str = "", sample: pathlib.Path | None = None) -> pathlib.Path:
         """Write one export into the project's `exports/` folder and return it."""
-        if kind not in ("fcpxml", "srt"):
-            raise ValidationError(f"formato di export sconosciuto: {kind} (fcpxml o srt)")
+        if kind not in ("fcpxml", "srt", "capcut"):
+            raise ValidationError(f"formato di export sconosciuto: {kind} (fcpxml, srt o capcut)")
         folder = self.project_dir(project_id) / "exports"
         folder.mkdir(exist_ok=True)
+        if kind == "capcut":
+            return self.export_capcut(project_id, folder / f"{project_id}-capcut.zip", drafts_root=drafts_root, sample=sample)
         target = folder / f"{project_id}.{kind}"
         target.write_text(
             self.export_fcpxml(project_id) if kind == "fcpxml" else self.export_srt(project_id),
