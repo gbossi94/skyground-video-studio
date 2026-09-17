@@ -61,6 +61,7 @@ export const api = {
   fullCut: (slug: string) =>
     call<JobSummary>(`/api/projects/${slug}/cut/full`, { method: "POST", body: "{}" }),
   job: (slug: string, id: string) => call<JobSummary>(`/api/projects/${slug}/jobs/${id}`),
+  jobs: (slug: string) => call<JobSummary[]>(`/api/projects/${slug}/jobs?limit=5`),
   projects: () => call<ProjectSummary[]>("/api/projects"),
   cut: (slug: string) => call<CutState>(`/api/projects/${slug}/cut`),
   transcript: (slug: string) => call<Transcript>(`/api/projects/${slug}/cut/transcript`),

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, type ProjectSummary } from "./api";
+import { api, ApiError, type JobSummary, type ProjectSummary } from "./api";
 import { Preview, type PreviewHandle } from "./components/Preview";
 import { NewProject } from "./components/NewProject";
 import { ENGINE, Questions, reviewQueue } from "./components/Questions";
@@ -11,6 +11,7 @@ export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [creating, setCreating] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [working, setWorking] = useState<JobSummary | null>(null);
   const [cut, setCut] = useState<CutState | null>(null);
   const [transcript, setTranscript] = useState<Transcript | null>(null);
   const [selected, setSelected] = useState<Question | null>(null);
@@ -56,6 +57,36 @@ export default function App() {
   useEffect(() => {
     if (!project) return;
     void reload(project.id).catch((cause) => setError(String(cause)));
+  }, [project, reload]);
+
+  // The worker does the slow parts — transcription, the editor model, the
+  // render — and the documents only change when it is done. Without this the
+  // editor would show "the footage has not been heard yet" with a button
+  // while a full job was already halfway through hearing it. Poll the queue,
+  // show what is in flight, and reload the state when it lands.
+  useEffect(() => {
+    if (!project) return;
+    let previous: JobSummary | null = null;
+    let stopped = false;
+    const tick = async () => {
+      try {
+        const jobs = await api.jobs(project.id);
+        const live = jobs.find((job) => job.status === "queued" || job.status === "running") ?? null;
+        if (!stopped) setWorking(live);
+        if (previous && !live) {
+          const ended = jobs.find((job) => job.id === previous?.id);
+          if (ended?.status === "failed") setNotice(`${describe(ended.kind)}: fallito — ${ended.error ?? ""}`);
+          else if (ended?.status === "succeeded") setNotice(`${describe(ended.kind)}: fatto`);
+          await reload(project.id);
+        }
+        previous = live;
+      } catch {
+        /* the next tick retries */
+      }
+    };
+    void tick();
+    const timer = window.setInterval(tick, 5000);
+    return () => { stopped = true; window.clearInterval(timer); };
   }, [project, reload]);
 
   // Keep the selection pointing at the freshest copy of the question: the plan
@@ -140,6 +171,7 @@ export default function App() {
           )}
         </div>
         <div className="top-actions">
+          {working && <span className="pill working">{describe(working.kind)}…</span>}
           <button className="ghost" onClick={() => setCreating(true)}>Nuovo montaggio</button>
           {plan && <Status plan={plan} />}
           <button
@@ -204,7 +236,16 @@ export default function App() {
       {notice && <div className="notice">{notice}</div>}
       {sheet}
 
-      {!plan ? (
+      {working && !plan ? (
+        <Empty
+          title={`Lo studio sta lavorando: ${describe(working.kind)}`}
+          detail={
+            working.status === "queued"
+              ? "In coda: parte appena il worker è libero."
+              : "In corso nel worker. Questa pagina si aggiorna da sola quando ha finito."
+          }
+        />
+      ) : !plan ? (
         <Missing
           state={cut.state}
           busy={busy !== null}
@@ -323,6 +364,19 @@ function Status({ plan }: { plan: CutPlan }) {
       </span>
     </div>
   );
+}
+
+/** What a job of this kind is doing, in the words of the person waiting. */
+function describe(kind: string): string {
+  switch (kind) {
+    case "full": return "montaggio completo (trascrizione, montaggio, render)";
+    case "analyze": return "trascrizione del girato";
+    case "render": return "render del film";
+    case "proxy": return "anteprima del girato";
+    case "sync": return "sincronizzazione della composizione";
+    case "validate": return "validazione del progetto";
+    default: return kind;
+  }
 }
 
 function Missing({
