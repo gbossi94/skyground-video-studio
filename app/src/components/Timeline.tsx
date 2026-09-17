@@ -87,6 +87,9 @@ const HEIGHT = CLIP_TOP + CLIP_H + 22;
 const HANDLE_W = 11;
 const GRAB = 9;
 const MIN_PX_PER_SEC = 4;
+/** A gutter at either end of the axis. Without it the first clip, the ruler's
+ *  first label and the playhead at zero are all cut in half by the edge. */
+const PAD = 16;
 const MAX_PX_PER_SEC = 600;
 
 type Drag =
@@ -131,13 +134,14 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(prop
   const invalidate = useCallback(() => { dirty.current = true; }, []);
   const shown = () => scene.current.preview ?? scene.current.sequence ?? sequence;
 
-  const fitScale = () => Math.max(MIN_PX_PER_SEC, view.current.width / Math.max(shown().duration, 0.5));
+  const span = () => Math.max(120, view.current.width - PAD * 2);
+  const fitScale = () => Math.max(MIN_PX_PER_SEC, span() / Math.max(shown().duration, 0.5));
   const scale = () => view.current.pxPerSec || fitScale();
-  const x = (output: number) => (output - view.current.start) * scale();
-  const timeAt = (px: number) => view.current.start + px / scale();
+  const x = (output: number) => PAD + (output - view.current.start) * scale();
+  const timeAt = (px: number) => view.current.start + (px - PAD) / scale();
 
   const clampStart = (start: number, px: number) =>
-    Math.max(0, Math.min(start, Math.max(0, shown().duration - view.current.width / px + 0.5)));
+    Math.max(0, Math.min(start, Math.max(0, shown().duration - span() / px)));
 
   // --------------------------------------------------------------- resources
 
@@ -194,7 +198,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(prop
     reveal: (output) => {
       const px = x(output);
       if (px >= 40 && px <= view.current.width - 40) return;
-      view.current.start = clampStart(output - view.current.width / scale() / 3, scale());
+      view.current.start = clampStart(output - span() / scale() / 3, scale());
       invalidate();
     },
     redraw: invalidate,
@@ -438,9 +442,10 @@ function paint(element: HTMLCanvasElement, scene: Scene) {
   ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, width, HEIGHT);
 
-  const px = scene.view.pxPerSec || Math.max(MIN_PX_PER_SEC, width / Math.max(scene.sequence.duration, 0.5));
-  const x = (output: number) => (output - scene.view.start) * px;
-  const viewEnd = scene.view.start + width / px;
+  const px = scene.view.pxPerSec
+    || Math.max(MIN_PX_PER_SEC, Math.max(120, width - PAD * 2) / Math.max(scene.sequence.duration, 0.5));
+  const x = (output: number) => PAD + (output - scene.view.start) * px;
+  const viewEnd = scene.view.start + (width - PAD) / px;
 
   drawRuler(ctx, scene, x, px, viewEnd, width);
   drawTrack(ctx, scene, x, px, viewEnd, width);
@@ -464,6 +469,7 @@ function drawRuler(
   ctx.textBaseline = "middle";
   for (let at = first; at <= Math.min(viewEnd, scene.sequence.duration) + step; at += step) {
     if (at < -EPS) continue;
+    if (x(at) < PAD - 1) continue;
     const left = Math.round(x(at)) + 0.5;
     ctx.fillStyle = C.rulerLine;
     ctx.fillRect(left, RULER_H - 7, 1, 6);
@@ -664,21 +670,24 @@ function drawCuts(ctx: CanvasRenderingContext2D, scene: Scene, x: (t: number) =>
     const label = wide ? `${style.label} ${format(cut.removed)}` : format(cut.removed);
     ctx.font = "600 9.5px Inter, ui-sans-serif, system-ui";
     const w = ctx.measureText(label).width + 20;
+    // Kept inside the canvas: a badge for the join at zero used to be sliced
+    // in half by the left edge.
+    const bx = Math.min(Math.max(at, w / 2 + 3), scene.view.width - w / 2 - 3);
     ctx.fillStyle = selected ? C.accent : wide ? "#2b2e36" : "#1d1f26";
-    roundRect(ctx, at - w / 2, y - 8, w, 16, 8);
+    roundRect(ctx, bx - w / 2, y - 8, w, 16, 8);
     ctx.fill();
     if (!selected) {
       ctx.strokeStyle = "rgba(242,241,238,0.10)";
-      roundRect(ctx, at - w / 2 + 0.5, y - 7.5, w - 1, 15, 8);
+      roundRect(ctx, bx - w / 2 + 0.5, y - 7.5, w - 1, 15, 8);
       ctx.stroke();
     }
     ctx.fillStyle = style.dot;
     ctx.beginPath();
-    ctx.arc(at - w / 2 + 9, y, 3, 0, Math.PI * 2);
+    ctx.arc(bx - w / 2 + 9, y, 3, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = selected ? "#11130b" : C.ink;
     ctx.textBaseline = "middle";
-    ctx.fillText(label, at - w / 2 + 16, y);
+    ctx.fillText(label, bx - w / 2 + 16, y);
     ctx.textBaseline = "alphabetic";
   }
 }
