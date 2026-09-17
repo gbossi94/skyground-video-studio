@@ -71,3 +71,13 @@ npm run check
 ```
 
 Il file `CLAUDE.md` contiene le regole editoriali permanenti del video.
+
+## Passaggio alla sessione sul Mac (settembre 2026)
+
+La sessione remota ha portato lo studio a montare da solo un girato caricato via UI (branch `claude/phase-2-smart-cut`, PR #2: leggila, è la storia completa). Quello che resta si fa solo su una macchina con gli editor installati, quindi la sessione continua sul Mac di Gabriele. Stato e istruzioni:
+
+- **Produzione**: https://skyground-studio.onrender.com (Render, servizio `skyground-studio`, deploy automatico dal branch). Account di Gabriele già creato. I job (`full`) si seguono da `GET /api/projects/{id}/jobs`.
+- **DaVinci Resolve**: lo studio esporta FCPXML e SRT (`GET …/export/fcpxml|srt`). Il ponte `scripts/davinci/Skyground.py` va copiato in `~/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/` con accanto `skyground.json` (`url`, `email`, `password`, `project` opzionale): da Workspace → Scripts → Utility → Skyground scarica l'ultimo montaggio e costruisce progetto e timeline via API di Resolve. **Non è mai stato eseguito dentro Resolve**: i test (`tests/test_davinci_bridge.py`) usano oggetti finti. Primo incarico: lanciarlo, leggere la console di Resolve, correggere ciò che l'API vera rifiuta (nomi dei setting, `AppendToTimeline` con i dizionari `startFrame/endFrame`, l'import dell'SRT), e poi tenere la logica pura nello script — che deve restare un solo file, sola libreria standard, perché Resolve lo esegue col Python di sistema.
+- **CapCut** (9.4.0-beta6): `GET …/export/capcut` scrive una bozza nella forma della bozza campione caricata nel workspace (`capcut/sample/`, `PUT /api/capcut/sample` con lo zip della cartella). CapCut la elencava ma la prima versione non si apriva; la seconda (base = bozza vera svuotata, file di corredo copiati) è da verificare aprendola. Se non si apre: confrontare la cartella generata con `0909 (1)` in `~/Movies/CapCut/User Data/Projects/com.lveditor.draft`, e cercare il log di CapCut sotto `~/Library/Containers/com.lemon.lvoverseas/Data/Movies/CapCut/User Data/`. La logica sta in `skyground/core/capcut.py`, i test in `tests/test_capcut.py` (campione finto scritto a mano: la bozza vera non entra mai nel repository).
+- **Credenziali da ruotare** (esposte in chat nella sessione remota): chiave Anthropic, chiave OpenAI (`SKYGROUND_OPENAI_API_KEY`), password dell'account di servizio `claude@skyground.online`, `SKYGROUND_SECRET_KEY`, e la password temporanea di Gabriele.
+- **Aperto**: il nastro effetti `sfx.wav` non è ri-temporizzabile (serve una lista di eventi); il piano generato per `-01` non è mai stato applicato alla timeline approvata (scelta di Gabriele).
