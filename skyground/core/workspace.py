@@ -84,6 +84,16 @@ def find_ffmpeg() -> str:
     raise StudioError("FFmpeg non disponibile; installalo o imposta FFMPEG_BIN")
 
 
+def audio_seconds(path: pathlib.Path, rate: int = 48000) -> float:
+    """How much sound a file holds, by decoding and counting the samples."""
+    out = subprocess.run(
+        [find_ffmpeg(), "-v", "error", "-i", str(path), "-vn", "-f", "s16le",
+         "-ac", "1", "-ar", str(rate), "-"],
+        capture_output=True, check=True,
+    ).stdout
+    return len(out) / 2 / rate
+
+
 def measured_duration(path: pathlib.Path) -> float:
     """How long a file really is, asked of the file itself.
 
@@ -864,7 +874,12 @@ class Workspace:
         ).name
         subprocess.run(
             [ffmpeg, "-y", "-v", "error", "-i", str(source), "-vn",
-             "-af", f"aresample=48000,loudnorm=I={voice_target}:TP={peak}:LRA=11,apad",
+             # `asetpts` after `loudnorm`: the filter delays its timestamps by
+             # its own look-ahead — 85 ms on the TEST film — while the samples
+             # come out in place, so `-t` cut the file 85 ms short (the muxer
+             # wrote the nominal length anyway) and a seek into the tail landed
+             # 85 ms off. Timestamps rebuilt from the sample count, both hold.
+             "-af", f"aresample=48000,loudnorm=I={voice_target}:TP={peak}:LRA=11,asetpts=N/SR/TB,apad",
              "-t", f"{length:.6f}",
              "-c:a", "aac", "-b:a", "256k", "-ar", "48000", "-ac", "2", str(voice)],
             check=True,
@@ -892,9 +907,9 @@ class Workspace:
             # consumed once. And the labels are words: a label of `[v]` or `[a]`
             # is read by ffmpeg as a stream specifier, not as a name.
             chain = (
-                f"[0:a]aresample=48000,loudnorm=I={voice_target}:TP={peak}:LRA=11,apad,"
+                f"[0:a]aresample=48000,loudnorm=I={voice_target}:TP={peak}:LRA=11,asetpts=N/SR/TB,apad,"
                 f"asplit=2[voce][chiave];"
-                f"[1:a]aresample=48000,loudnorm=I={music_target}:TP={peak}:LRA=11[musica];"
+                f"[1:a]aresample=48000,loudnorm=I={music_target}:TP={peak}:LRA=11,asetpts=N/SR/TB[musica];"
                 f"[musica][chiave]sidechaincompress="
                 f"threshold={float(ducking.get('threshold', 0.03))}:"
                 f"ratio={float(ducking.get('ratio', 4))}:"
@@ -917,10 +932,13 @@ class Workspace:
         # The mix is what the renderer lays over the picture: if it is not the
         # same length, everything after the first cut is a guess.
         for produced in (voice, mix):
-            drift = abs(measured_duration(produced) - length)
+            # Counted in samples, not read from the header: the header said
+            # 44.700 s of a file that held 44.615 s of sound.
+            heard = audio_seconds(produced)
+            drift = abs(heard - length)
             if drift > 1.0 / fps:
                 raise ValidationError(
-                    f"{produced.name} dura {measured_duration(produced):.3f}s contro i "
+                    f"{produced.name} dura {heard:.3f}s contro i "
                     f"{length:.3f}s dell'immagine ({drift * 1000:.0f} ms): "
                     "sopra il montaggio non starebbe a tempo"
                 )

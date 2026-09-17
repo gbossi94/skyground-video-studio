@@ -249,6 +249,12 @@ def test_the_soundtrack_is_rebuilt_from_the_cut_that_exists_now(tmp_path):
         assert abs(workspace.measured_duration(composition / made) - picture) < 1 / 30, (
             f"{made} non dura quanto l'immagine"
         )
+        # Counted, not read from the header: `loudnorm` delays its timestamps
+        # by its look-ahead and `-t` used to cut the sound 85 ms short while
+        # the header claimed the full length.
+        assert abs(workspace.audio_seconds(composition / made) - picture) < 1 / 30, (
+            f"{made} contiene meno suono di quanto dichiara"
+        )
 
 
 @needs_ffmpeg
@@ -277,18 +283,18 @@ def test_a_mix_that_does_not_match_the_picture_is_refused(tmp_path):
     )
 
     workspace_under_test = Workspace(root)
-    original = workspace.measured_duration
+    original = workspace.audio_seconds
 
-    def lying(path):
+    def lying(path, rate=48000):
         # Il mix esce lungo il doppio: è la forma del difetto vero.
-        return original(path) * 2 if path.name == "soundtrack.m4a" else original(path)
+        return original(path, rate) * 2 if path.name == "soundtrack.m4a" else original(path, rate)
 
-    workspace.measured_duration = lying
+    workspace.audio_seconds = lying
     try:
         with pytest.raises(ValidationError, match="a tempo"):
             workspace_under_test.build_soundtrack("prova")
     finally:
-        workspace.measured_duration = original
+        workspace.audio_seconds = original
 
 
 @needs_ffmpeg
