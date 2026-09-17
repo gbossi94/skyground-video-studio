@@ -179,7 +179,8 @@ button.ghost.small { padding: 6px 11px; border-radius: 8px; font-weight: 700; }
 @media (max-width: 1000px) {
   .workspace { grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto auto;
-    grid-template-areas: "decide" "stage" "timeline"; }
+    grid-template-areas: "decide" "stage" "timeline";
+    overflow-y: auto; }
   .phone { max-height: 46vh; }
   .decide { max-height: none; overflow: visible; }
 }

@@ -613,6 +613,7 @@ export default function App() {
                 fps={fps}
                 rules={rules}
                 removed={plan.removed}
+                engineKept={engineKeptOf(plan)}
                 questions={plan.questions}
                 selectedQuestion={selected}
                 media={cut.media}
@@ -631,6 +632,15 @@ export default function App() {
       )}
     </div>
   );
+}
+
+/** Which words the engine kept before anyone touched the cut: remembered by
+ *  the manual layer once there is one, read off the segments until then. */
+function engineKeptOf(plan: CutPlan): [number, number][] {
+  if (plan.manual && "engineKept" in plan.manual) return plan.manual.engineKept;
+  return plan.segments
+    .filter((segment) => segment.firstWord !== null && segment.lastWord !== null)
+    .map((segment) => [segment.firstWord as number, segment.lastWord as number]);
 }
 
 /** How many choices a person made by hand. Those are the sticky ones: a

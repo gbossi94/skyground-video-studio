@@ -9,7 +9,20 @@ import react from "@vitejs/plugin-react";
 // worker. The session cookie is set by that studio and, on localhost, Chrome
 // sends it back even when it is marked Secure.
 const studio = process.env.SKYGROUND_API ?? "http://127.0.0.1:4173";
-const proxy = { target: studio, changeOrigin: true, secure: true, cookieDomainRewrite: "" };
+const proxy = {
+  target: studio,
+  changeOrigin: true,
+  secure: true,
+  cookieDomainRewrite: "",
+  // The studio refuses writes from an origin it does not know: present the
+  // proxied requests as its own.
+  configure: (server: { on: (event: "proxyReq", listener: (request: { setHeader: (name: string, value: string) => void }) => void) => void }) => {
+    server.on("proxyReq", (request) => {
+      request.setHeader("origin", studio);
+      request.setHeader("referer", `${studio}/`);
+    });
+  },
+};
 
 export default defineConfig({
   plugins: [react()],

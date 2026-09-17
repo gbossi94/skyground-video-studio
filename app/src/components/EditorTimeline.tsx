@@ -45,6 +45,10 @@ interface Props {
   fps: number;
   rules: Rules;
   removed: Removed[];
+  /** Which words the engine kept before anyone touched the cut: a gap over
+   *  those is the person's doing, a gap over the others keeps the engine's
+   *  reason. `[first, last]` pairs, inclusive. */
+  engineKept: [number, number][];
   questions: Question[];
   selectedQuestion: Question | null;
   media: MediaInfo | undefined;
@@ -80,9 +84,17 @@ type Drag =
  *  take at any zoom costs the same to draw as a six-second one. */
 export const EditorTimeline = forwardRef<TimelineHandle, Props>(function EditorTimeline(props, handle) {
   const {
-    state, preview, words, silences, duration, fps, rules, removed, questions, selectedQuestion,
-    media, playhead, playing, selection, onSeek, onSelect, onSelectQuestion, onPreview, onCommit,
+    state, preview, words, silences, duration, fps, rules, removed, engineKept, questions,
+    selectedQuestion, media, playhead, playing, selection, onSeek, onSelect, onSelectQuestion,
+    onPreview, onCommit,
   } = props;
+  const engineFlags = useMemo(() => {
+    const flags = new Uint8Array(words.length);
+    for (const [first, last] of engineKept) {
+      for (let index = Math.max(0, first); index <= Math.min(words.length - 1, last); index += 1) flags[index] = 1;
+    }
+    return flags;
+  }, [engineKept, words.length]);
   const shown = preview ?? state;
 
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -278,8 +290,8 @@ export const EditorTimeline = forwardRef<TimelineHandle, Props>(function EditorT
     const paint = () => {
       frame = 0;
       draw(element, {
-        width, scale, viewStart, duration, shown, words, removed, questions, selectedQuestion,
-        playhead, selection, peaks, sheets, rules,
+        width, scale, viewStart, duration, shown, words, removed, engineFlags, questions,
+        selectedQuestion, playhead, selection, peaks, sheets, rules,
       });
     };
     frame = requestAnimationFrame(paint);
@@ -314,6 +326,7 @@ interface Scene {
   shown: EditState;
   words: Word[];
   removed: Removed[];
+  engineFlags: Uint8Array;
   questions: Question[];
   selectedQuestion: Question | null;
   playhead: number;
@@ -401,7 +414,7 @@ function drawThumbs(ctx: CanvasRenderingContext2D, scene: Scene, x: (s: number) 
 
 function drawRegions(ctx: CanvasRenderingContext2D, scene: Scene, x: (s: number) => number, viewEnd: number) {
   const { regions } = LANE;
-  const { shown, words, removed, peaks, selection } = scene;
+  const { shown, words, removed, engineFlags, peaks, selection } = scene;
   ctx.fillStyle = "#111110";
   ctx.fillRect(0, regions.top, scene.width, regions.height);
 
@@ -415,9 +428,7 @@ function drawRegions(ctx: CanvasRenderingContext2D, scene: Scene, x: (s: number)
   if (cursor < scene.duration - EPSILON) gaps.push({ start: cursor, end: scene.duration, index: shown.kept.length });
   for (const gap of gaps) {
     if (gap.end < scene.viewStart || gap.start > viewEnd) continue;
-    const known = removed.find((item) => Math.abs(item.start - gap.start) < 0.02 && Math.abs(item.end - gap.end) < 0.02);
-    const reason = known?.reason ?? (wordsInside(words, gap.start, gap.end).length ? "manual" : "silence");
-    const style = REASON_STYLE[reason] ?? REASON_STYLE.manual;
+    const style = REASON_STYLE[gapReason(gap, words, engineFlags, removed, scene.duration)] ?? REASON_STYLE.manual;
     const left = x(gap.start);
     const right = x(gap.end);
     ctx.fillStyle = style.fill;
@@ -470,6 +481,29 @@ function drawRegions(ctx: CanvasRenderingContext2D, scene: Scene, x: (s: number)
       ctx.fillRect(px - 0.5, regions.top + regions.height / 2 - 6, 1, 12);
     }
   });
+}
+
+/** Why a gap is a gap, the way the server will say it: no words is a pause;
+ *  words the engine kept are the person's removal; words the engine removed
+ *  keep the engine's reason. */
+function gapReason(
+  gap: { start: number; end: number },
+  words: Word[],
+  engineFlags: Uint8Array,
+  removed: Removed[],
+  duration: number,
+): string {
+  const inside = wordsInside(words, gap.start, gap.end);
+  if (!inside.length) {
+    if (gap.start <= EPSILON) return "lead-in";
+    if (gap.end >= duration - EPSILON) return "lead-out";
+    return "silence";
+  }
+  if (inside.some((index) => engineFlags[index])) return "manual";
+  const spoken = removed.find(
+    (item) => !["silence", "lead-in", "lead-out"].includes(item.reason) && item.start < gap.end && item.end > gap.start,
+  );
+  return spoken?.reason ?? "retake";
 }
 
 function drawWords(ctx: CanvasRenderingContext2D, scene: Scene, x: (s: number) => number, viewEnd: number) {

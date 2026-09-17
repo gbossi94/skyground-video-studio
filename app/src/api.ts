@@ -14,7 +14,9 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const payload = response.status === 204 ? {} : await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new ApiError(
-      (payload as { error?: string }).error ?? "richiesta non riuscita", response.status, payload,
+      (payload as { error?: string }).error ?? `richiesta non riuscita (${response.status})`,
+      response.status,
+      payload,
     );
   }
   return payload as T;

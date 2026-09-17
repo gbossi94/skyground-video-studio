@@ -66,7 +66,16 @@ export const Player = forwardRef<PlayerHandle, Props>(function Player(
     issue(seconds);
   };
 
-  const frameCentre = (seconds: number) => (Math.round(seconds * fps) + 0.5) / fps;
+  /** The middle of the frame `seconds` falls in. Seeking to the middle rather
+   *  than the edge is what makes the seek land on the frame meant: rounding
+   *  can never tip it into the neighbour. */
+  const frameCentre = (seconds: number) => (Math.floor(seconds * fps + 1e-6) + 0.5) / fps;
+
+  /** `frames` whole frames from where the player is (or is on its way to).
+   *  Counted in frame numbers, not seconds: adding 1/fps to a time already at
+   *  a frame's middle and rounding again stepped two frames at a time. */
+  const frameStep = (from: number, frames: number) =>
+    (Math.floor(from * fps + 1e-6) + frames + 0.5) / fps;
 
   const setPlaying = (value: boolean) => callbacks.current.onPlayingChange(value);
 
@@ -116,7 +125,7 @@ export const Player = forwardRef<PlayerHandle, Props>(function Player(
       const element = video.current;
       if (!element) return;
       if (mode.current !== "idle") pause();
-      seek(frameCentre((wanted.current ?? element.currentTime) + frames / fps));
+      seek(frameStep(wanted.current ?? element.currentTime, frames));
     },
     shuttle: (direction) => {
       const element = video.current;
@@ -134,7 +143,7 @@ export const Player = forwardRef<PlayerHandle, Props>(function Player(
         mode.current = "back";
         setPlaying(true);
       }
-      seek(frameCentre(element.currentTime - rate.current / fps));
+      seek(frameStep(wanted.current ?? element.currentTime, -rate.current));
     },
     playRange: (start, end) => {
       const element = video.current;
@@ -172,7 +181,7 @@ export const Player = forwardRef<PlayerHandle, Props>(function Player(
         seek(back);
       } else if (current === "back") {
         if (at <= 1 / fps) pause();
-        else seek(frameCentre(at - rate.current / fps));
+        else seek(frameStep(at, -rate.current));
       }
       handleId = element.requestVideoFrameCallback?.(onFrame) ?? 0;
     };
