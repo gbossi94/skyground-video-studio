@@ -196,3 +196,34 @@ button.ghost.small { padding: 6px 11px; border-radius: 8px; font-weight: 700; }
 .pill.working { font-size: 12px; color: var(--muted); padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; animation: breathe 1.6s ease-in-out infinite; }
 @keyframes breathe { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
 a.ghost.link { text-decoration: none; display: inline-flex; align-items: center; }
+
+/* ------------------------------------------------------- timeline (canvas) */
+
+.editor-timeline { position: relative; }
+.editor-timeline canvas { touch-action: none; user-select: none; cursor: text; }
+.timeline-bar .undo { display: flex; gap: 6px; align-items: center; }
+.timeline-bar .undo button { border: 1px solid var(--line); background: #1b1b18; color: var(--ink);
+  border-radius: 6px; padding: 4px 9px; font-size: 11px; }
+.timeline-bar .undo button:disabled { color: #5c5a54; cursor: not-allowed; }
+.timeline-bar .save { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
+.timeline-bar .save.dirty { color: #e0c46a; }
+.timeline-bar .save.conflict { color: var(--warm); }
+.timeline-bar .save button { border: 0; background: var(--lime); color: #11130b; border-radius: 6px;
+  padding: 5px 10px; font-size: 11px; font-weight: 800; }
+.timeline-bar .save button:disabled { background: #3a3d2c; color: #8d8f80; cursor: not-allowed; }
+.timecode { font-variant-numeric: tabular-nums; font-size: 13px; letter-spacing: .04em;
+  color: var(--ink); font-weight: 700; }
+.transport .transport-keys { display: flex; gap: 4px; }
+.transport .transport-keys button { border: 1px solid var(--line); background: #1b1b18; color: var(--ink);
+  border-radius: 7px; padding: 8px 10px; font-size: 12px; font-weight: 700; }
+.transport .transport-keys button:disabled { color: var(--muted); cursor: not-allowed; }
+
+.help-backdrop { position: fixed; inset: 0; background: #0009; z-index: 30; display: grid; place-items: center; }
+.help { width: 440px; max-width: calc(100vw - 40px); max-height: 85vh; overflow: auto; background: #1b1b18;
+  border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; box-shadow: 0 18px 50px #000a; }
+.help header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.help table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.help td { padding: 5px 4px; border-bottom: 1px solid var(--line); }
+.help td:first-child { width: 72px; }
+.help kbd { font: inherit; font-size: 11px; font-weight: 800; background: #24241f; border: 1px solid var(--line);
+  border-radius: 5px; padding: 2px 6px; white-space: nowrap; }

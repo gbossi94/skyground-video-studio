@@ -1,7 +1,7 @@
-import type { CutPlan, CutState, Transcript } from "./types";
+import type { CutPlan, CutState, MediaInfo, Transcript } from "./types";
 
 class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly payload: unknown = null) {
     super(message);
   }
 }
@@ -13,7 +13,9 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const payload = response.status === 204 ? {} : await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new ApiError((payload as { error?: string }).error ?? "richiesta non riuscita", response.status);
+    throw new ApiError(
+      (payload as { error?: string }).error ?? "richiesta non riuscita", response.status, payload,
+    );
   }
   return payload as T;
 }
@@ -78,16 +80,51 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ option }),
     }),
-  apply: (slug: string) =>
-    call<{ applied: boolean; clips: number; duration: number; problems: string[] }>(
+  apply: (slug: string, options: { etag?: string | null; rebuild?: boolean; render?: boolean } = {}) =>
+    call<{ applied: boolean; clips: number; duration: number; problems: string[]; revision: number;
+      etag: string | null; job?: JobSummary }>(
       `/api/projects/${slug}/cut/apply`,
-      { method: "POST" },
+      {
+        method: "POST",
+        body: JSON.stringify({ rebuild: options.rebuild ?? false, render: options.render ?? true }),
+        headers: options.etag ? { "If-Match": `"${options.etag}"` } : {},
+      },
     ),
+  /** The cut as it is on the timeline. `etag` is the plan this edit started
+   *  from: a stale one comes back as a 409 with the current plan, never as a
+   *  silent overwrite. */
+  edits: (slug: string, kept: { first: number; last: number; start?: number; end?: number }[], etag?: string | null) =>
+    call<EditResult>(`/api/projects/${slug}/cut/edits`, {
+      method: "POST",
+      body: JSON.stringify({ kept }),
+      headers: etag ? { "If-Match": `"${etag}"` } : {},
+    }),
+  editsFromTimeline: (slug: string) =>
+    call<EditResult>(`/api/projects/${slug}/cut/edits`, {
+      method: "POST",
+      body: JSON.stringify({ fromTimeline: true }),
+    }),
+  media: (slug: string) => call<MediaInfo>(`/api/projects/${slug}/cut/media`),
+  requestMedia: (slug: string) =>
+    call<JobSummary>(`/api/projects/${slug}/cut/media`, { method: "POST", body: "{}" }),
   analyze: (slug: string) =>
     call<{ id: string; status: string }>(`/api/projects/${slug}/cut/analyze`, {
       method: "POST",
       body: "{}",
     }),
 };
+
+export interface EditResult {
+  state: string;
+  plan: CutPlan;
+  etag: string;
+  notes: string[];
+}
+
+/** What a 409 carries: the plan somebody else saved, and its etag. */
+export interface ConflictPayload {
+  current: CutPlan;
+  etag: string;
+}
 
 export { ApiError };

@@ -86,6 +86,25 @@ export interface Stats {
 
 export type PlanStatus = "draft" | "ready" | "applied";
 
+/** The cut as a person left it on the timeline: what the server realised the
+ *  plan from, and what the engine had kept before anyone touched it. */
+export interface ManualLayer {
+  kept: { first: number; last: number; start?: number; end?: number }[];
+  engineKept: [number, number][];
+  editedAt: string;
+  editedBy: string;
+  basedOnTimelineEtag: string;
+  appliedRevision?: number;
+}
+
+/** Every number the engine has an opinion about; the ones the editor needs. */
+export interface Policy {
+  lead_in: number;
+  lead_out: number;
+  min_segment: number;
+  [key: string]: number | boolean;
+}
+
 export interface CutPlan {
   source: string;
   sourceDuration: number;
@@ -97,6 +116,8 @@ export interface CutPlan {
   removed: Removed[];
   questions: Question[];
   utterances: Utterance[];
+  policy: Policy;
+  manual: ManualLayer | Record<string, never>;
 }
 
 export interface AnalysisSummary {
@@ -110,10 +131,33 @@ export interface AnalysisSummary {
   proxyUrl: string | null;
 }
 
+/** Where the proxy, the peaks and the thumbnail sheets are, signed for hours. */
+export interface MediaInfo {
+  ready: boolean;
+  job?: { id: string; kind: string; status: string } | null;
+  proxy?: string;
+  codec?: string;
+  fps?: number;
+  gop?: number;
+  duration?: number;
+  peaks?: string;
+  peaksRate?: number;
+  thumbs?: { urls: string[]; count: number; columns: number; rows: number; perSheet: number;
+    width: number; height: number; fps: number };
+  ttl?: number;
+  expiresAt?: number;
+}
+
 export interface CutState {
   state: PlanStatus | "senza-analisi" | "senza-piano";
   analysis: AnalysisSummary | null;
   plan: CutPlan | null;
+  /** The plan's etag: what goes back as `If-Match` on an edit. */
+  etag?: string | null;
+  /** The applied timeline: when its etag is not the one the manual layer was
+   *  based on, somebody restored or rewrote it behind the editor's back. */
+  timeline?: { etag: string; revision: number } | null;
+  media?: MediaInfo;
 }
 
 export interface Transcript {

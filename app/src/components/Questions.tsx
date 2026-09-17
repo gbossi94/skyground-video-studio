@@ -1,5 +1,5 @@
 import type { Option, Question } from "../types";
-import { formatTime } from "./Timeline";
+import { formatTime } from "./timeline/time";
 
 const KIND_LABEL: Record<string, string> = {
   "take-choice": "Ripetizione",
