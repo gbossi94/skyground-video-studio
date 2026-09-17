@@ -211,3 +211,23 @@ def test_the_lua_side_reads_what_the_python_side_writes():
     for field in ("cut.name", "cut.width", "cut.height", "cut.fps", "cut.raw", "cut.subtitles", "cut.clips", "clip.start", "clip.frames"):
         assert field in lua
     assert "latest.lua" in lua
+
+
+def test_choose_takes_the_project_whose_cut_is_newest_unless_one_is_named(bridge):
+    class Studio:
+        def jobs(self, project):
+            return {
+                "a-01": [{"kind": "render", "status": "failed", "finishedAt": "2026-09-17T12:00:00+00:00"}],
+                "b-02": [{"kind": "full", "status": "failed", "finishedAt": "2026-09-17T11:00:00+00:00"},
+                         {"kind": "full", "status": "succeeded", "finishedAt": "2026-09-16T22:15:42+00:00"}],
+                "test-260917": [{"kind": "full", "status": "succeeded", "finishedAt": "2026-09-17T10:12:08+00:00"}],
+            }[project]
+
+    projects = [{"id": "a-01", "name": "Uno"}, {"id": "b-02", "name": "Due"}, {"id": "test-260917", "name": "TEST"}]
+    # Alphabetical order would say a-01; the newest successful cut is TEST's.
+    assert bridge.choose(Studio(), projects)["id"] == "test-260917"
+    assert bridge.choose(Studio(), projects, "b-02")["id"] == "b-02"
+    assert bridge.choose(Studio(), projects, "Due")["id"] == "b-02"  # by name too
+    assert bridge.choose(Studio(), projects[:1])["id"] == "a-01"  # the only one, no cut needed
+    with pytest.raises(SystemExit):
+        bridge.choose(Studio(), projects, "nope")

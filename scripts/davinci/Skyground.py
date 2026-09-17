@@ -11,7 +11,11 @@ and who you are:
 
     {"url": "https://skyground-studio.onrender.com",
      "email": "…", "password": "…",
-     "project": ""}            ← empty: the most recent project
+     "project": ""}            ← empty: the project whose cut is newest
+
+Which project: the one named on the command line (`python3 Skyground.py
+test-260917`), else the one in `skyground.json`, else the project whose
+latest successful cut is the most recent, else the only one there is.
 
 On each run the script signs in, takes the project's cut (timeline, raw
 footage, captions), keeps a copy under ~/Movies/Skyground/<project>/, and
@@ -105,9 +109,42 @@ class Studio:
     def projects(self) -> list[dict]:
         return self.get_json("/api/projects")
 
+    def jobs(self, project: str) -> list[dict]:
+        return self.get_json(f"/api/projects/{urllib.parse.quote(project)}/jobs")
+
     def document(self, project: str, name: str):
         payload = self.get_json(f"/api/projects/{urllib.parse.quote(project)}/files/{name}")
         return payload.get("content", payload) if isinstance(payload, dict) and "content" in payload else payload
+
+
+def latest_cut(studio: Studio, project: dict) -> str:
+    """When this project's cut last succeeded, as the API's ISO timestamp,
+    or "" if it never did. The API lists jobs newest first."""
+    try:
+        jobs = studio.jobs(project["id"])
+    except (urllib.error.URLError, ValueError, KeyError):
+        return ""
+    for job in jobs:
+        if job.get("kind") == "full" and job.get("status") == "succeeded":
+            return job.get("finishedAt") or job.get("createdAt") or ""
+    return ""
+
+
+def choose(studio: Studio, projects: list[dict], wanted: str = "") -> dict:
+    """The project to bring over: the one asked for, or the one whose cut
+    is newest, or the only one."""
+    if wanted:
+        for project in projects:
+            if wanted in (project["id"], project.get("name")):
+                return project
+        raise SystemExit(f"Skyground: progetto «{wanted}» non trovato; disponibili: {', '.join(p['id'] for p in projects)}")
+    if len(projects) == 1:
+        return projects[0]
+    dated = [(latest_cut(studio, project), project) for project in projects]
+    with_cut = [pair for pair in dated if pair[0]]
+    if with_cut:
+        return max(with_cut, key=lambda pair: pair[0])[1]
+    return projects[0]
 
 
 def fetch(studio: Studio, project_id: str, folder: pathlib.Path) -> dict:
@@ -269,10 +306,11 @@ def main(resolve=None, argv: list[str] | None = None) -> int:
     projects = studio.projects()
     if not projects:
         raise SystemExit("Skyground: nessun progetto visibile con questo account")
-    wanted = config.get("project") or ""
-    chosen = next((p for p in projects if p["id"] == wanted), None) if wanted else projects[0]
-    if chosen is None:
-        raise SystemExit(f"Skyground: progetto «{wanted}» non trovato; disponibili: {', '.join(p['id'] for p in projects)}")
+    named = [arg for arg in argv if not arg.startswith("--")]
+    chosen = choose(studio, projects, named[0] if named else (config.get("project") or ""))
+    if len(projects) > 1:
+        say("Skyground: progetti disponibili: " + ", ".join(p["id"] for p in projects)
+            + " (per sceglierne uno: python3 Skyground.py <id>)")
     folder = pathlib.Path(config.get("folder") or (pathlib.Path.home() / "Movies" / "Skyground")) / chosen["id"]
     say(f"Skyground: progetto «{chosen['name']}» ({chosen['id']}) → {folder}")
     fetched = fetch(studio, chosen["id"], folder)
