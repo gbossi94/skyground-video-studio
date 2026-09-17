@@ -6,8 +6,9 @@ because transcribing six minutes of footage takes longer than any sane timeout.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body, Depends, Request, Response
 
+from skyground.analysis import align, manual
 from skyground.analysis.adviser import build_adviser
 from skyground.analysis.editor import build_model
 from skyground.api.deps import ProjectContext, get_settings, get_storage, project_context
@@ -28,12 +29,30 @@ def _editor_model(settings: Settings, override: dict | None = None):
     return build_model(settings, override)
 
 
+def _if_match(request: Request) -> str | None:
+    return (request.headers.get("If-Match") or "").strip('"') or None
+
+
+def _timeline_state(context: ProjectContext) -> dict | None:
+    try:
+        state = context.documents.read(context.project, "timeline.json")
+    except NotFound:
+        return None
+    return {"etag": state.etag, "revision": state.revision}
+
+
 @router.get("/api/projects/{slug}/cut")
 def read_plan(
+    response: Response,
     context: ProjectContext = Depends(project_context),
     storage: ObjectStorage = Depends(get_storage),
 ) -> dict:
-    """The current proposal, or what is missing before there can be one."""
+    """The current proposal, or what is missing before there can be one.
+
+    With it, the plan's etag (for `If-Match` on edits) and the applied
+    timeline's revision, so the editor can tell when the two have drifted
+    apart — an old revision restored, a file edited by hand.
+    """
     context.require("document:read")
     if not cuts.has_analysis(context.session, context.project):
         return {"state": "senza-analisi", "plan": None, "analysis": None}
@@ -50,14 +69,29 @@ def read_plan(
         plan = cuts.load_plan(context.session, context.project)
     except NotFound:
         return {"state": "senza-piano", "analysis": summary, "plan": None}
-    return {"state": plan.status, "analysis": summary, "plan": plan.as_dict()}
+    etag = cuts.plan_etag(context.session, context.project)
+    if etag:
+        response.headers["ETag"] = f'"{etag}"'
+    return {
+        "state": plan.status,
+        "analysis": summary,
+        "plan": plan.as_dict(),
+        "etag": etag,
+        "timeline": _timeline_state(context),
+    }
 
 
 @router.get("/api/projects/{slug}/cut/transcript")
 def read_transcript(context: ProjectContext = Depends(project_context)) -> dict:
-    """Word level timings, which the timeline needs to draw the speech."""
+    """Word level timings, which the timeline needs to draw the speech.
+
+    The *prepared* words — trimmed to the silences the audio measured — with
+    the same indices the plan uses. Served raw, they disagreed with the plan by
+    the width of a pause, and a boundary snapped to a raw word edge was a
+    boundary the server refused as landing inside a word.
+    """
     context.require("document:read")
-    analysis = cuts.load_analysis(context.session, context.project)
+    analysis = align.prepare(cuts.load_analysis(context.session, context.project))
     return {
         "duration": analysis.duration,
         "words": [word.as_dict() for word in analysis.words],
@@ -156,13 +190,79 @@ def answer_question(
     return {"state": plan.status, "plan": plan.as_dict()}
 
 
-@router.post("/api/projects/{slug}/cut/apply")
-def apply_plan(context: ProjectContext = Depends(project_context)) -> dict:
-    """Turn an answered plan into the project's timeline."""
+@router.post("/api/projects/{slug}/cut/edits")
+def edit_plan(
+    request: Request,
+    response: Response,
+    payload: dict = Body(default={}),
+    context: ProjectContext = Depends(project_context),
+) -> dict:
+    """The cut as a person left it on the timeline.
+
+    `kept` is the ordered list of kept word ranges, each with the seconds its
+    edges were dragged to; `fromTimeline: true` takes the applied timeline
+    instead, which is how a restored revision becomes editable again. `If-Match`
+    carries the plan's etag: a stale one is refused with 409 and the current
+    plan, so two tabs never overwrite each other unawares.
+    """
     context.require("document:write")
-    return cuts.apply(
-        context.session, context.project, context.workspace, actor=context.user
+    base_etag = _if_match(request)
+    notes: list[str] = []
+    if (payload or {}).get("fromTimeline"):
+        plan, notes = cuts.edit_from_timeline(
+            context.session, context.project, context.workspace,
+            actor=context.user, base_etag=base_etag,
+        )
+    else:
+        raw = (payload or {}).get("kept")
+        if not isinstance(raw, list):
+            raise ValidationError("indica `kept`, la lista dei pezzi tenuti, oppure `fromTimeline`")
+        kept = [manual.Kept.from_dict(item) for item in raw]
+        plan = cuts.edit(
+            context.session, context.project, kept,
+            actor=context.user, base_etag=base_etag, workspace=context.workspace,
+        )
+    etag = cuts.plan_etag(context.session, context.project)
+    response.headers["ETag"] = f'"{etag}"'
+    return {"state": plan.status, "plan": plan.as_dict(), "etag": etag, "notes": notes}
+
+
+@router.post("/api/projects/{slug}/cut/apply")
+def apply_plan(
+    request: Request,
+    payload: dict = Body(default={}),
+    context: ProjectContext = Depends(project_context),
+) -> dict:
+    """Turn an answered plan into the project's timeline.
+
+    `rebuild: true` also queues everything downstream — picture and sound,
+    composition, checks and (unless `render: false`) the film — so that one
+    click is the whole job. The revision number comes back at once; the job
+    reports on its own.
+    """
+    context.require("document:write")
+    result = cuts.apply(
+        context.session, context.project, context.workspace,
+        actor=context.user, base_etag=_if_match(request),
     )
+    if (payload or {}).get("rebuild"):
+        context.require("job:create")
+        job = job_service.enqueue(
+            context.session,
+            context.project,
+            kind="rebuild",
+            payload={
+                "render": bool((payload or {}).get("render", True)),
+                "timelineRevision": result["revision"],
+            },
+            actor=context.user,
+            max_attempts=1,
+        )
+        from skyground.api import serializers
+
+        result["job"] = serializers.job_payload(job)
+    result["etag"] = cuts.plan_etag(context.session, context.project)
+    return result
 
 
 def _proxy_url(context: ProjectContext, storage: ObjectStorage) -> str | None:

@@ -51,8 +51,11 @@ def applicable(plan: CutPlan, analysis: Analysis, **kwargs) -> tuple[bool, list[
     engine refusing to guess — so it is reported separately.
     """
     problems = [str(item) for item in check(plan, analysis, **kwargs)]
-    for question in plan.open_questions:
-        problems.append(f"[domanda aperta] {question.prompt}")
+    if not plan.manual:
+        # A cut a person laid out by hand answers every question at once: what
+        # is on the timeline is the decision.
+        for question in plan.open_questions:
+            problems.append(f"[domanda aperta] {question.prompt}")
     return (not problems), problems
 
 

@@ -16,14 +16,14 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from skyground.analysis import pipeline
+from skyground.analysis import manual, pipeline
 from skyground.analysis.adviser import Adviser, NullAdviser
 from skyground.analysis.cut import CutPolicy
 from skyground.analysis.models import Analysis, CutPlan
 from skyground.core import retime
 from skyground.core.workspace import Workspace, content_digest
 from skyground.db.models import Document, Project, User
-from skyground.errors import NotFound, ValidationError
+from skyground.errors import Conflict, NotFound, ValidationError
 from skyground.services import audit
 from skyground.services.documents import DocumentService
 
@@ -108,6 +108,102 @@ def policy_for(project: Project) -> CutPolicy:
     return CutPolicy(**known)
 
 
+def plan_etag(session: Session, project: Project) -> str | None:
+    """The digest of the stored plan: what a client sends back as `If-Match`."""
+    document = _row(session, project, CUTPLAN)
+    return document.etag if document and document.content else None
+
+
+def has_manual(session: Session, project: Project) -> bool:
+    document = _row(session, project, CUTPLAN)
+    return bool(document and document.content and (document.content.get("manual") or {}))
+
+
+def _policy_of(plan: CutPlan, project: Project) -> CutPolicy:
+    """The policy the plan was built with, which is the one its edits obey."""
+    known = CutPolicy().as_dict()
+    stored = {key: value for key, value in (plan.policy or {}).items() if key in known}
+    return CutPolicy(**stored) if stored else policy_for(project)
+
+
+def _check_etag(session: Session, project: Project, plan: CutPlan, base_etag: str | None) -> None:
+    current = plan_etag(session, project)
+    if base_etag and current and base_etag != current:
+        raise Conflict(
+            "il montaggio è cambiato dopo il caricamento", current=plan.as_dict(), etag=current
+        )
+
+
+# ------------------------------------------------------------- the hand edit
+
+
+def edit(
+    session: Session,
+    project: Project,
+    kept: list[manual.Kept],
+    *,
+    actor: User | None = None,
+    base_etag: str | None = None,
+    workspace: Workspace | None = None,
+) -> CutPlan:
+    """The cut as a person left it on the timeline, realised and stored.
+
+    `base_etag` is the plan the client edited: when the stored plan has moved
+    on since — another tab, another person — the write is refused with the
+    current plan, never merged in silence.
+    """
+    analysis = load_analysis(session, project)
+    try:
+        plan = load_plan(session, project)
+    except NotFound as error:
+        raise ValidationError("prima serve una proposta del motore da correggere") from error
+    _check_etag(session, project, plan, base_etag)
+    timeline_etag = None
+    if workspace is not None:
+        try:
+            timeline_etag = DocumentService(session, workspace).read(project, "timeline.json").etag
+        except NotFound:
+            timeline_etag = None
+    updated = manual.realise(
+        analysis,
+        plan,
+        kept,
+        policy=_policy_of(plan, project),
+        edited_by=actor.email if actor else None,
+        timeline_etag=timeline_etag,
+    )
+    save_plan(session, project, updated, actor=actor)
+    audit.record(
+        session,
+        "cut.edit",
+        actor=actor,
+        project=project,
+        data={
+            "segments": len(updated.segments),
+            "removedManual": sum(1 for item in updated.removed if item.reason == "manual"),
+            "duration": round(updated.output_duration, 3),
+        },
+    )
+    return updated
+
+
+def edit_from_timeline(
+    session: Session,
+    project: Project,
+    workspace: Workspace,
+    *,
+    actor: User | None = None,
+    base_etag: str | None = None,
+) -> tuple[CutPlan, list[str]]:
+    """The applied timeline — hand written, or an old revision restored —
+    brought back onto the plan so it can be corrected from there."""
+    analysis = load_analysis(session, project)
+    timeline = DocumentService(session, workspace).read(project, "timeline.json").content
+    kept, notes = manual.from_timeline(analysis, timeline.get("clips", []))
+    plan = edit(session, project, kept, actor=actor, base_etag=base_etag, workspace=workspace)
+    return plan, notes
+
+
 def propose(
     session: Session,
     project: Project,
@@ -122,9 +218,15 @@ def propose(
     decisions = {}
     if keep_answers:
         try:
-            decisions = pipeline.decisions_from(load_plan(session, project))
+            previous = load_plan(session, project)
         except NotFound:
-            decisions = {}
+            previous = None
+        if previous is not None and previous.manual:
+            raise ValidationError(
+                "questo montaggio è stato corretto a mano: rigenerarlo lo perderebbe. "
+                "«Riparti da zero» butta via le correzioni e ricalcola dal girato"
+            )
+        decisions = pipeline.decisions_from(previous) if previous is not None else {}
     if model is None:
         policy = policy_for(project)
     else:
@@ -161,16 +263,19 @@ def answer(
 ) -> CutPlan:
     analysis = load_analysis(session, project)
     plan = load_plan(session, project)
-    updated = pipeline.answer(
-        analysis,
-        plan,
-        question_id,
-        option_id,
-        policy=policy_for(project),
-        adviser=adviser or NullAdviser(),
-        answered_by=actor.email if actor else None,
-        model=model,
-    )
+    if plan.manual:
+        updated = _answer_on_the_timeline(analysis, plan, project, question_id, option_id, actor)
+    else:
+        updated = pipeline.answer(
+            analysis,
+            plan,
+            question_id,
+            option_id,
+            policy=policy_for(project),
+            adviser=adviser or NullAdviser(),
+            answered_by=actor.email if actor else None,
+            model=model,
+        )
     save_plan(session, project, updated, actor=actor)
     audit.record(
         session,
@@ -183,12 +288,38 @@ def answer(
     return updated
 
 
+def _answer_on_the_timeline(analysis, plan, project, question_id, option_id, actor) -> CutPlan:
+    """With a hand edit in place, an answer is a change to the kept ranges:
+    the engine's `edit:` decisions can still be flipped, everything else is
+    decided on the timeline itself."""
+    question = next((item for item in plan.questions if item.id == question_id), None)
+    if question is None:
+        raise ValidationError(f"domanda non trovata: {question_id}")
+    if question.option(option_id) is None:
+        raise ValidationError(f"opzione non valida per {question_id}: {option_id}")
+    if not question_id.startswith("edit:"):
+        raise ValidationError(
+            "con un montaggio corretto a mano le decisioni si prendono sulla timeline"
+        )
+    first, last = (int(part) for part in question_id[5:].split("-"))
+    kept = [manual.Kept.from_dict(item) for item in plan.manual.get("kept", [])]
+    kept = manual.with_answer(kept, first, last, keep=(option_id == "keep"))
+    return manual.realise(
+        analysis,
+        plan,
+        kept,
+        policy=_policy_of(plan, project),
+        edited_by=actor.email if actor else None,
+    )
+
+
 def apply(
     session: Session,
     project: Project,
     workspace: Workspace,
     *,
     actor: User | None = None,
+    base_etag: str | None = None,
 ) -> dict:
     """Write the plan into `timeline.json`, through the normal document path.
 
@@ -198,7 +329,8 @@ def apply(
     """
     analysis = load_analysis(session, project)
     plan = load_plan(session, project)
-    if plan.open_questions:
+    _check_etag(session, project, plan, base_etag)
+    if plan.open_questions and not plan.manual:
         raise ValidationError(
             f"restano {len(plan.open_questions)} domande senza risposta: "
             "il montaggio non viene applicato finché non sono risolte"
@@ -214,13 +346,13 @@ def apply(
     manifest_now = documents.read(project, "project.json").content
     fps = int(manifest_now.get("canvas", {}).get("fps", 30))
     updated["duration"] = retime.snap_to_frames(updated["clips"], fps)
+    how = "montaggio corretto a mano" if plan.manual else "montaggio automatico"
     state = documents.write(
         project,
         "timeline.json",
         updated,
         actor=actor,
-        message=f"montaggio automatico: {len(updated['clips'])} clip, "
-        f"{updated['duration']:.1f}s",
+        message=f"{how}: {len(updated['clips'])} clip, {updated['duration']:.1f}s",
     )
 
     manifest = dict(documents.read(project, "project.json").content)
@@ -239,6 +371,9 @@ def apply(
     )
 
     plan.applied_at = datetime.now(UTC).isoformat(timespec="seconds")
+    if plan.manual:
+        plan.manual["appliedRevision"] = state.revision
+        plan.manual["basedOnTimelineEtag"] = state.etag
     save_plan(session, project, plan, actor=actor)
     audit.record(
         session,

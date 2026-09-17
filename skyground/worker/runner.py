@@ -78,6 +78,7 @@ class Worker:
         self.handlers: dict[str, Callable[[Session, RenderJob, Project], dict]] = {
             "analyze": self.handle_analyze,
             "full": self.handle_full,
+            "rebuild": self.handle_rebuild,
             "validate": self.handle_validate,
             "sync": self.handle_sync,
             "render": self.handle_render,
@@ -242,6 +243,12 @@ class Worker:
         report: dict = {}
         if not cuts.has_analysis(session, project) or job.payload.get("reanalyze"):
             report["analysis"] = self.handle_analyze(session, job, project)
+        if cuts.has_manual(session, project) and not job.payload.get("discardManual"):
+            raise StudioError(
+                "questo montaggio è stato corretto a mano: rifarlo da capo lo perderebbe. "
+                "Per applicare e rigenerare le correzioni c'è il job 'rebuild'; "
+                "per ripartire dal girato, 'discardManual': true"
+            )
         override = job.payload.get("editor") or None
         model = build_model(self.settings, override) if self.settings.cut_engine == "editor" else None
         plan = cuts.propose(session, project, model=model, keep_answers=not job.payload.get("fresh", True))
@@ -267,6 +274,25 @@ class Worker:
         problems = self.workspace.validate(project.slug)
         if problems:
             raise StudioError("progetto non valido dopo il montaggio:\n- " + "\n- ".join(problems))
+        if job.payload.get("render", True):
+            report["render"] = self.handle_render(session, job, project)
+        return report
+
+    def handle_rebuild(self, session: Session, job: RenderJob, project: Project) -> dict:
+        """Everything downstream of an applied timeline, again.
+
+        A person corrected the cut and applied it: the documents are already
+        written. What is left is the slow half of `full` — picture and sound
+        rebuilt, the composition synced and checked, the film rendered — so
+        that saving a correction is the whole job, not the first of four.
+        """
+        self._require_workspace(project)
+        report: dict = {"timelineRevision": job.payload.get("timelineRevision")}
+        self.workspace.build_source(project.slug)
+        self.workspace.sync(project.slug)
+        problems = self.workspace.validate(project.slug)
+        if problems:
+            raise StudioError("progetto non valido dopo la correzione:\n- " + "\n- ".join(problems))
         if job.payload.get("render", True):
             report["render"] = self.handle_render(session, job, project)
         return report

@@ -385,6 +385,11 @@ class CutPlan:
     #: summary of the film, the repairs made to its answer, and what the
     #: re-reading found. Empty when the heuristic engine made the plan.
     editor: dict[str, Any] = field(default_factory=dict)
+    #: The cut as a person left it on the timeline: the kept word ranges with
+    #: the seconds their edges were dragged to, and what the engine had kept
+    #: before anyone touched it. Empty until somebody edits by hand; from then
+    #: on it is the source the segments are realised from (`analysis.manual`).
+    manual: dict[str, Any] = field(default_factory=dict)
     policy: dict[str, Any] = field(default_factory=dict)
     generated_at: str = ""
     applied_at: str = ""
@@ -400,6 +405,9 @@ class CutPlan:
     def status(self) -> str:
         if self.applied_at:
             return STATUS_APPLIED
+        if self.manual:
+            # A person decided the whole cut on the timeline: nothing is open.
+            return STATUS_READY
         return STATUS_DRAFT if self.open_questions else STATUS_READY
 
     @property
@@ -443,6 +451,7 @@ class CutPlan:
             "restarts": list(self.restarts),
             "passages": list(self.passages),
             "editor": dict(self.editor),
+            "manual": dict(self.manual),
         }
 
     @staticmethod
@@ -475,6 +484,7 @@ class CutPlan:
         plan.restarts = list(value.get("restarts", []))
         plan.passages = list(value.get("passages", []))
         plan.editor = dict(value.get("editor", {}) or {})
+        plan.manual = dict(value.get("manual", {}) or {})
         for item in value.get("takes", []):
             plan.takes.append(
                 TakeGroup(

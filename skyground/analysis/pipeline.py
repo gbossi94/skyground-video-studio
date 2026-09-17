@@ -184,4 +184,9 @@ def apply_to_timeline(plan: CutPlan, analysis: Analysis, timeline: dict) -> dict
         "plan": plan.generated_at,
         "questions": len(plan.questions),
     }
+    if plan.manual:
+        updated["generatedBy"]["manual"] = {
+            "editedBy": plan.manual.get("editedBy", ""),
+            "editedAt": plan.manual.get("editedAt", ""),
+        }
     return updated
