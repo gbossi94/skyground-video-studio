@@ -119,6 +119,11 @@ def stream_durations(path: pathlib.Path) -> tuple[float, float]:
     return of("v:0"), of("a:0")
 
 
+#: Audio fades at the edges of every piece, in seconds. See `build_source`.
+FADE_IN = 0.04
+FADE_OUT = 0.06
+
+
 def _refuse_drift(path: pathlib.Path, fps: int, *, allowance: float = 0.5) -> None:
     """Refuse a piece whose sound and picture are not the same length.
 
@@ -782,7 +787,13 @@ class Workspace:
                      # avrebbe meno audio che video, e il silenzio è preferibile
                      # a uno scarto; `atrim` chiude l'audio alla lunghezza
                      # esatta senza toccare il video, come farebbe `-t`.
-                     "-af", f"aresample=48000,asetpts=PTS-STARTPTS,apad,atrim=end={length:.6f}",
+                     # Short fades at both ends of every piece: a cut lands in a
+                     # pause, but a pause is not digital silence — room tone,
+                     # a breath, a lip smack — and a hard edge on it is a click
+                     # at every join. Forty milliseconds in and sixty out sit
+                     # inside the lead-in and lead-out, and never touch a word.
+                     "-af", f"aresample=48000,asetpts=PTS-STARTPTS,apad,atrim=end={length:.6f},"
+                            f"afade=t=in:st=0:d={FADE_IN},afade=t=out:st={max(0.0, length - FADE_OUT):.6f}:d={FADE_OUT}",
                      "-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2",
                      str(piece)],
                     check=True,

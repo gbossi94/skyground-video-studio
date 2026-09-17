@@ -49,6 +49,14 @@ EDITOR_POLICY = CutPolicy(
     ask_when_unsure=False,
 )
 
+#: A cut may only land where the speaker paused at least this long between the
+#: word kept and the word dropped. Calibrated on the approved human edit of the
+#: reference footage: its tightest boundary has 0.25s of pause, the median 3.0s.
+#: The model's cut after «commerciale,» on the TEST footage had 0.08s — the
+#: transcriber's token boundary inside continuous speech — and the word came
+#: out broken however exactly the cut was placed.
+JOIN = 0.18
+
 #: A gap this long in the result is a hole, and goes to the reviewer.
 HOLE = 0.50
 #: Five words in a row said twice is content said twice, unless it is a refrain
@@ -118,6 +126,8 @@ Il tuo lavoro è decidere cosa resta nel video. Per ogni cosa che la persona vol
 
 La versione migliore è quella completa, fluida, detta con convinzione. Non è necessariamente l'ultima. Quando un tentativo si ferma e riparte, la parte buona di solito comincia dopo la ripartenza, anche a metà di un respiro: taglia lì. Tieni frasi intere — mai una clip che comincia a metà pensiero o finisce prima del punto.
 
+Un taglio deve cadere in una pausa. Non separare due parole che si susseguono senza stacco (meno di due decimi di secondo, leggibile dai tempi): allarga o restringi il taglio fino alla pausa più vicina, perché un taglio dentro il parlato continuo esce come una parola rotta, comunque lo si metta.
+
 Non cambiare l'ordine. Non tenere due volte lo stesso contenuto, anche se le parole sono diverse. Se un pezzo è unico ma lungo, tienilo: togliere contenuto per ritmo è una scelta di chi pubblica, non tua. Se un pezzo è inutilizzabile — frase mai finita e senza una versione buona — toglilo e dillo nel motivo.
 
 Rispondi con segmenti contigui che coprono ogni parola da 0 all'ultima, ognuno keep o cut, con un motivo breve e concreto («seconda ripresa di #12, la prima si ferma a "vorresti"»). Il campo quote riporta la prima e l'ultima parola del segmento, per controllo."""
@@ -125,6 +135,8 @@ Rispondi con segmenti contigui che coprono ogni parola da 0 all'ultima, ognuno k
 REVIEW = """Sei il montatore di Skyground e stai rileggendo un montaggio prima che venga renderizzato. Ricevi il testo del video come uscirebbe, con ⟨taglio⟩ dove due pezzi non contigui sono stati incollati, e sotto le segnalazioni dei controlli automatici.
 
 Cerca: contenuto detto due volte (anche con parole diverse), frasi che partono a metà pensiero o finiscono prima del punto, pezzi rimasti che erano tentativi abbandonati, e pezzi tolti che invece servivano perché senza di loro il discorso non si capisce. Una ripetizione voluta — un ritornello — resta: dillo.
+
+Una segnalazione «taglio senza pausa» dice che un confine del taglio cade fra due parole attaccate: lì la parola esce rotta. Sposta il confine alla pausa indicata, togliendo o rimettendo le parole in mezzo; se non correggi, il montaggio le rimetterà da solo.
 
 Se il montaggio è pulito rispondi ok. Altrimenti elenca le correzioni con i numeri delle parole originali: cut per togliere, keep per rimettere."""
 
@@ -538,6 +550,78 @@ def internal_holes(words: list[Word], kept: list[bool], segments, policy: CutPol
     return found
 
 
+def glued_cuts(words: list[Word], kept: list[bool], threshold: float = JOIN) -> list[str]:
+    """Boundaries between a kept word and a dropped one with no pause between.
+
+    The code guarantees no cut lands *inside* a word; it cannot make a cut
+    between two words that flow into each other sound like anything but a
+    broken word. Each finding names the nearest pause on either side, so the
+    reviewer can move the boundary instead of guessing.
+    """
+    found = []
+    for index in range(len(words) - 1):
+        if kept[index] == kept[index + 1]:
+            continue
+        gap = words[index + 1].t - words[index].end
+        if gap >= threshold:
+            continue
+        before = next(
+            (f"dopo «{words[i].s}» ({i}, {words[i + 1].t - words[i].end:.2f}s)"
+             for i in range(index - 1, -1, -1) if words[i + 1].t - words[i].end >= threshold),
+            "nessuna",
+        )
+        after = next(
+            (f"dopo «{words[i].s}» ({i}, {words[i + 1].t - words[i].end:.2f}s)"
+             for i in range(index + 1, len(words) - 1) if words[i + 1].t - words[i].end >= threshold),
+            "nessuna",
+        )
+        what = (
+            "la parola tenuta uscirebbe mozzata: sposta la fine del taglio a una pausa, o rimetti le parole"
+            if kept[index]
+            else "l'attacco resta incollato alla parola tolta: se c'è una pausa poco dopo, comincia da lì"
+        )
+        found.append(
+            f"fra «{words[index].s}» ({index}) e «{words[index + 1].s}» ({index + 1}) non c'è pausa "
+            f"({gap:.2f}s): {what} — pausa più vicina prima: {before}; dopo: {after}"
+        )
+    return found
+
+
+def unglue(edit: Edit, words: list[Word], total: int, threshold: float = JOIN) -> Edit:
+    """Keep back whatever a glued cut would have torn: the safe way to be wrong.
+
+    A cut that begins or ends in continuous speech is widened *inward* — the
+    dropped words are kept again up to the first pause inside the dropped run,
+    or all of them when it has none. Keeping a redundant phrase costs a few
+    seconds; cutting it where there is no pause costs a broken word, every
+    time. The reviewer had its chance to move the cut first; what remains is
+    repaired here and written down.
+    """
+    flags = edit.kept(total)
+    revisions: list[dict] = []
+    for index in range(total - 1):
+        if not flags[index] or flags[index + 1] or words[index + 1].t - words[index].end >= threshold:
+            continue
+        # Only a cut that *starts* glued is repaired. There the kept word's end
+        # is what breaks: the clip has to stop where the next word begins, and
+        # the transcriber's boundary is often early — «commercial…», «stella…».
+        # A cut that *ends* glued leaves the kept word's start under the
+        # lead-in and its fade, which cover the tail of the dropped word; and
+        # keeping back what precedes it would bring back the abandoned attempt
+        # it usually is («se hai un abitudispecialist lavori nel mondo…»).
+        first, last = index + 1, index + 1
+        while last + 1 < total and not flags[last + 1] and words[last + 1].t - words[last].end < threshold:
+            last += 1
+        for i in range(first, last + 1):
+            flags[i] = True
+        revisions.append({"first": first, "last": last, "action": "keep"})
+        edit.repairs.append(
+            f"tenute le parole {first}-{last} («{words[first].s} … {words[last].s}»): "
+            f"il taglio cadeva fra parole attaccate, senza pausa"
+        )
+    return apply_revisions(edit, revisions, total, by="riparazione") if revisions else edit
+
+
 def mid_thought_starts(words: list[Word], kept: list[bool]) -> list[str]:
     """A kept run that begins right after a kept-out word with no sentence end
     before it is a candidate for starting mid-thought. Only a candidate."""
@@ -590,6 +674,7 @@ def plan_edit(
             [f"detto due volte: {line}" for line in repeated_content(words, kept)]
             + [f"buco: {line}" for line in internal_holes(words, kept, segments, policy)]
             + [f"attacco: {line}" for line in mid_thought_starts(words, kept)]
+            + [f"taglio senza pausa: {line}" for line in glued_cuts(words, kept)]
         )
         report = present_result(words, kept, segments)
         if findings:
@@ -600,6 +685,7 @@ def plan_edit(
             break
         edit = apply_revisions(edit, answer["revisions"], len(words), by="rilettura")
 
+    edit = unglue(edit, words, len(words))
     final = _with_people(edit, decisions, len(words))
     kept = final.kept(len(words))
     plan.segments = _realise(analysis, utterances, kept, policy)

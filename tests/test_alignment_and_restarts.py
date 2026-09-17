@@ -51,6 +51,53 @@ def test_a_word_wholly_inside_a_silence_is_left_alone():
     assert (corrected[0].t, corrected[0].end) == (5.0, 5.3)
 
 
+def test_a_word_reported_from_before_its_pause_moves_to_the_far_side():
+    """«stellare» on the TEST footage: reported 64.34–65.14 with a silence at
+    64.52–64.80 inside it. The speech before the silence is the last vowel of
+    «veramente»; the word is the longer stretch after. Trimming it to the
+    first part — as the clamp did — rendered as «stella…»."""
+    words = words_from([("veramente", 63.98, 64.34), ("stellare", 64.34, 65.14), ("e", 65.64, 65.72)])
+    corrected = align.clamp_words(words, [Silence(64.515, 64.795)])
+    assert corrected[1].t == pytest.approx(64.795 - align.ONSET)
+    assert corrected[1].end == 65.14
+
+
+def test_a_stub_before_a_long_pause_is_the_word_on_the_far_side():
+    """«se» reported at 26.62–29.16 with the silence starting at 26.65: thirty
+    milliseconds of «speech», then a pause of 3.6 seconds, then the real word.
+    Trimmed to a stub it became a half-second clip of nothing."""
+    words = words_from([("che", 26.48, 26.62), ("se", 26.62, 29.16), ("hai", 29.16, 30.46), ("già", 30.46, 30.60)])
+    corrected = align.clamp_words(words, [Silence(26.65, 30.275)])
+    assert corrected[1].t == pytest.approx(30.275 - align.ONSET)
+    assert corrected[1].end < corrected[2].t + 1e-9  # in order, and «hai» follows
+    assert corrected[2].end == 30.46
+    assert corrected[1].t - corrected[0].end > 3.0  # the pause is visible again
+
+
+def test_a_quiet_onset_keeps_its_consonant_and_leaves_the_smack_behind():
+    """«Se ti interessa»: the «S» sits under the detector's threshold, so the
+    silence it reports ends at the vowel; and a lip smack 150ms earlier split
+    the silence in two for one millisecond. The word starts a little before
+    the detector says, and after the smack."""
+    words = words_from([("cercando.", 54.88, 55.30), ("Se", 56.42, 56.74), ("ti", 56.74, 56.82)])
+    silences = [Silence(55.122, 56.489), Silence(56.49, 56.796)]
+    corrected = align.clamp_words(words, silences)
+    assert corrected[1].t == pytest.approx(56.796 - align.ONSET)
+    assert corrected[1].t > 56.49  # the smack is not in the word
+    assert corrected[1].end == 56.74
+
+
+def test_silences_broken_for_a_blink_are_one_silence():
+    merged = align.merge_blips([Silence(56.49, 56.796), Silence(55.122, 56.489), Silence(60.0, 61.0)])
+    assert [(s.start, s.end) for s in merged] == [(55.122, 56.796), (60.0, 61.0)]
+
+
+def test_a_word_deep_inside_a_silence_stays_where_it_was_heard():
+    words = words_from([("mh", 4.5, 4.8)])
+    corrected = align.clamp_words(words, [Silence(4.0, 6.0)])
+    assert (corrected[0].t, corrected[0].end) == (4.5, 4.8)
+
+
 def test_without_silences_nothing_is_touched():
     words = words_from([("uno", 0.0, 0.4), ("due", 0.4, 0.9)])
     assert align.clamp_words(words, []) == words

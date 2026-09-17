@@ -32,32 +32,88 @@ MIN_WORD = 0.06
 #: non costano niente e la parola arriva intera.
 TAIL = 0.20
 
+#: How much of a silence is left *before* the detector says speech resumes. A
+#: quiet onset — the «S» of «Se», the «f» of «faremo» — sits under the
+#: detector's threshold: the silence it reports ends when the vowel arrives,
+#: and a word snapped to that end lost its first consonant. A tenth and a half
+#: of silence is silence, and the consonant arrives whole.
+ONSET = 0.15
+
+#: A silence broken for less than this is one silence. A lip smack between two
+#: reported silences is not speech, and a word start snapped to it — as one was,
+#: on the TEST footage — put the smack at the head of the clip.
+BLIP = 0.05
+
+#: A word whose speech before a pause is shorter than this (and a small share
+#: of the word) was anchored to the previous word by the transcriber: «se»
+#: reported at the very start of a 3.6-second pause, its real self on the far
+#: side. Such a word belongs after the pause, not trimmed to a stub before it.
+STUB = 0.08
+
+#: A word reported wholly inside a silence but ending within this of the
+#: silence's end is the quiet onset of what follows it, and is moved there. A
+#: word deep inside a long silence is left where the transcriber put it.
+NEAR_END = 0.10
+
 
 def _overlapping(silences: list[Silence], start: float, end: float) -> list[Silence]:
     return [s for s in silences if s.end > start and s.start < end]
 
 
+def merge_blips(silences: list[Silence]) -> list[Silence]:
+    """Silences separated by less than `BLIP` are one silence."""
+    merged: list[Silence] = []
+    for silence in sorted(silences, key=lambda s: s.start):
+        if merged and silence.start - merged[-1].end < BLIP:
+            merged[-1] = Silence(merged[-1].start, max(merged[-1].end, silence.end))
+        else:
+            merged.append(silence)
+    return merged
+
+
 def clamp_words(words: list[Word], silences: list[Silence]) -> list[Word]:
     """Trim every word back to the speech the audio actually contains.
 
-    A word that runs into a silence is cut at the silence. A word that lies
-    entirely inside one is left alone — the transcriber heard *something* there,
-    and deleting it would be the engine overruling the words that were said.
+    The transcriber's timings drift in three ways the audio can tell apart. A
+    word stretched over the pause that follows it is cut at the silence (with a
+    tail, see `TAIL`). A word that *starts* early, swallowing the pause before
+    it — «stellare» reported from the last vowel of «veramente» — has a silence
+    inside it with more speech after than before: it moves to the far side. A
+    word anchored to the previous one with almost nothing before the pause is a
+    stub: it moves too. A word reported wholly inside a silence is kept — the
+    transcriber heard *something* — and, when it ends where the silence ends,
+    hugged to that end, because that is the quiet onset of a word.
     """
     if not silences or not words:
         return list(words)
 
-    ordered = sorted(silences, key=lambda s: s.start)
+    ordered = merge_blips(silences)
     corrected: list[Word] = []
     for word in words:
         start, end = word.t, word.end
         for silence in _overlapping(ordered, start, end):
             if silence.start <= start and silence.end >= end:
-                break  # wholly inside a silence: leave the word as heard
+                # Wholly inside: never deleted. Near the end, it is the onset
+                # the detector could not hear; deep inside, it stays as heard.
+                if silence.end - end <= NEAR_END:
+                    start = max(start, silence.end - ONSET)
+                    end = max(end, start + MIN_WORD)
+                break
             if silence.start > start:
-                end = min(end, silence.start + TAIL)
+                before = silence.start - start
+                after = max(0.0, end - silence.end)
+                if after > before and after >= STUB:
+                    # The pause is inside the reported span and the word is on
+                    # the far side of it.
+                    start = max(start, silence.end - ONSET)
+                elif before < STUB and before < 0.25 * (end - start):
+                    # A stub before the pause: the word is on the far side.
+                    start = silence.end - ONSET
+                    end = max(end, start + MIN_WORD)
+                else:
+                    end = min(end, silence.start + TAIL)
             elif silence.end < end:
-                start = max(start, silence.end)
+                start = max(start, silence.end - ONSET)
         if end - start < MIN_WORD:
             end = start + MIN_WORD
         corrected.append(Word(t=round(start, 3), end=round(end, 3), s=word.s, p=word.p))

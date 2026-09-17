@@ -169,6 +169,50 @@ def test_a_hole_is_measured_in_the_result_not_on_set():
     assert editor.internal_holes(words, kept, whole, loose)
 
 
+def test_a_cut_between_words_that_flow_into_each_other_is_reported_with_the_nearest_pauses():
+    """«sei commerciale, | nel mondo della bellezza, stiamo cercando»: the model
+    dropped «nel mondo della bellezza» and the boundary after «commerciale,»
+    had 80ms of transcriber gap and no pause. The word came out broken."""
+    words = [Word(0.0, 0.3, "vendi"), Word(0.3, 0.6, "prodotti,"), Word(0.8, 0.9, "sei"),
+             Word(0.9, 1.6, "commerciale,"), Word(1.68, 1.75, "nel"), Word(1.75, 1.9, "mondo"),
+             Word(1.9, 2.1, "della"), Word(2.1, 2.5, "bellezza,"), Word(2.9, 3.2, "stiamo")]
+    kept = [True, True, True, True, False, False, False, False, True]
+    found = editor.glued_cuts(words, kept)
+    assert len(found) == 1
+    assert "«commerciale,» (3) e «nel» (4)" in found[0]
+    assert "mozzata" in found[0]
+    assert "prima: dopo «prodotti,» (1, 0.20s)" in found[0]
+    assert "dopo: dopo «bellezza,» (7, 0.40s)" in found[0]
+    # A boundary in a real pause is not a finding.
+    assert editor.glued_cuts(words, [True, True, False, False, False, False, False, False, True]) == []
+
+
+def test_a_glued_cut_the_reviewer_left_is_kept_back_to_the_nearest_pause():
+    words = [Word(0.0, 0.3, "vendi"), Word(0.3, 0.6, "prodotti,"), Word(0.8, 0.9, "sei"),
+             Word(0.9, 1.6, "commerciale,"), Word(1.68, 1.75, "nel"), Word(1.75, 1.9, "mondo"),
+             Word(1.9, 2.1, "della"), Word(2.1, 2.5, "bellezza,"), Word(2.9, 3.2, "stiamo")]
+    edit = editor.Edit([editor.Decision(0, 3, True, ""), editor.Decision(4, 7, False, "ridondante"),
+                        editor.Decision(8, 8, True, "")])
+    repaired = editor.unglue(edit, words, len(words))
+    assert repaired.kept(len(words)) == [True] * 9
+    assert repaired.repairs and "4-7" in repaired.repairs[0]
+
+    # A cut that *ends* glued is left alone: the kept word's start sits under
+    # the lead-in and its fade, and what precedes it is usually an abandoned
+    # attempt («se hai un abitudispecialist lavori…») nobody wants back.
+    edit = editor.Edit([editor.Decision(0, 1, True, ""), editor.Decision(2, 3, False, "x"),
+                        editor.Decision(4, 8, True, "")])
+    repaired = editor.unglue(edit, words, len(words))
+    assert repaired.kept(len(words)) == [True, True, False, False, True, True, True, True, True]
+    assert repaired.repairs == []
+
+    # A cut run with a pause inside it is kept back only up to that pause.
+    words2 = [Word(0.0, 0.3, "a"), Word(0.35, 0.6, "b"), Word(0.65, 0.9, "c"), Word(1.5, 1.8, "d"), Word(2.5, 2.8, "e")]
+    edit = editor.Edit([editor.Decision(0, 0, True, ""), editor.Decision(1, 3, False, "x"), editor.Decision(4, 4, True, "")])
+    repaired = editor.unglue(edit, words2, 5)
+    assert repaired.kept(5) == [True, True, True, False, True]
+
+
 def test_a_clip_that_begins_after_a_cut_inside_a_sentence_is_a_candidate():
     words = speak(["uno due tre quattro. cinque sei"])
     # Cut «due tre», keep the rest: «quattro.» begins after a cut in the middle
