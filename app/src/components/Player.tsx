@@ -41,6 +41,12 @@ export const Player = forwardRef<PlayerHandle, Props>(function Player(
   const mode = useRef<Mode>("idle");
   const range = useRef<{ start: number; end: number } | null>(null);
   const rate = useRef(1);
+  /** Which clip is on screen. Kept rather than looked up from the presented
+   *  frame: a seek to the head of a clip lands on the frame *containing* its
+   *  start, whose timestamp is up to a frame earlier: looked up, that frame
+   *  belongs to no clip, and the player seeks to the same place for ever —
+   *  which is what made it stop at the first join instead of playing on. */
+  const playingIndex = useRef(0);
   const pending = useRef<number | null>(null);
   const seeking = useRef(false);
   const bag = useRef({ getSequence, onPlayingChange, onError, onEnded });
@@ -90,6 +96,7 @@ export const Player = forwardRef<PlayerHandle, Props>(function Player(
     element.playbackRate = rate.current;
     // At the end of the film, playing means playing it again from the top.
     if (clock.current >= sequence.duration - 0.05) clock.current = 0;
+    playingIndex.current = Math.max(0, sequence.clips.findIndex((clip) => clock.current < clip.outputEnd - 1e-6));
     issue(centre(sourceAt(sequence, clock.current)));
     void element.play().then(() => bag.current.onPlayingChange(true)).catch(() => bag.current.onPlayingChange(false));
   };
@@ -164,20 +171,35 @@ export const Player = forwardRef<PlayerHandle, Props>(function Player(
           issue(back);
         }
       } else if (current === "edit" && !element.paused) {
-        const clip = sequence.clips.find((item) => source >= item.start - 0.001 && source < item.end);
-        if (clip) {
-          clock.current = clip.outputStart + (source - clip.start);
-        } else {
-          // Past the end of a clip: on to the next one, or the film is over.
-          const next = sequence.clips.find((item) => item.start > source - 0.001);
-          if (!next) {
+        const clips = sequence.clips;
+        if (!clips.length) { pause(); return; }
+        const slack = 1.5 / fps;
+        let index = Math.min(playingIndex.current, clips.length - 1);
+        let clip = clips[index];
+        // The cut can change under a running film — a trim, an undo. When the
+        // frame on screen is nowhere near the clip we thought we were in,
+        // find it again rather than jumping somewhere absurd.
+        if (source < clip.start - slack || source > clip.end + slack) {
+          const found = clips.findIndex((item) => source >= item.start - slack && source < item.end);
+          if (found >= 0) { index = found; clip = clips[found]; }
+        }
+        playingIndex.current = index;
+
+        if (source >= clip.end - 1e-3) {
+          const following = clips[index + 1];
+          if (!following) {
             clock.current = sequence.duration;
             pause();
             bag.current.onEnded?.();
           } else {
-            clock.current = next.outputStart;
-            seekSource(centre(next.start));
+            // Straight on to the next piece, without stopping: this is the
+            // whole trick of playing an edit out of untouched footage.
+            playingIndex.current = index + 1;
+            clock.current = following.outputStart;
+            seekSource(centre(following.start));
           }
+        } else {
+          clock.current = clip.outputStart + Math.max(0, source - clip.start);
         }
       } else if (current === "back") {
         clock.current = outputAt(sequence, source);
