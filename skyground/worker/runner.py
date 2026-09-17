@@ -33,19 +33,27 @@ from skyground.storage import ObjectStorage, build_storage
 logger = logging.getLogger("skyground.worker")
 
 #: How a preview proxy is encoded. Half height keeps scrubbing responsive and
-#: the file small enough to stream over a hotel connection.
+#: the file small enough to stream over a hotel connection. A keyframe every
+#: fifteen frames, closed groups, no scene-cut keyframes: a seek anywhere
+#: decodes half a second at most, which is what makes frame-by-frame
+#: scrubbing in the browser feel immediate. The frame rate is pinned to the
+#: studio's grid so frame N in the editor is frame N in the render.
 PROXY_FORMATS = {
     "h264": (
         "source.mp4",
         "video/mp4",
         ("-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-pix_fmt", "yuv420p",
+         "-g", "15", "-keyint_min", "15", "-sc_threshold", "0",
+         "-x264-params", "open-gop=0",
          "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"),
     ),
     "vp9": (
         "source.webm",
         "video/webm",
         ("-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "34", "-deadline", "realtime",
-         "-cpu-used", "8", "-row-mt", "1", "-pix_fmt", "yuv420p", "-c:a", "libopus", "-b:a", "96k"),
+         "-cpu-used", "8", "-row-mt", "1", "-pix_fmt", "yuv420p",
+         "-g", "15", "-keyint_min", "15",
+         "-c:a", "libopus", "-b:a", "96k"),
     ),
 }
 
@@ -193,11 +201,21 @@ class Worker:
         )
         cuts.save_analysis(session, project, analysis)
         plan = cuts.propose(session, project, model=_editor_model())
+        # The editor needs a picture and a waveform to correct the cut on: a
+        # separate, low-priority job, queued once, so the proposal is not
+        # kept waiting on a second encode.
+        proxy_job = None
+        if not self.storage.exists(asset_service.object_key(project, "proxy/index.json")):
+            proxy_job = job_service.enqueue(
+                session, project, kind="proxy",
+                payload={"source": str(job.payload.get("source") or "")}, priority=-1,
+            ).id
         return {
             "words": len(analysis.words),
             "duration": analysis.duration,
             "provider": analysis.provider,
             "proposal": plan.stats(),
+            "proxyJob": proxy_job,
         }
 
     def _source_for(self, session: Session, project: Project, job: RenderJob):
@@ -331,39 +349,94 @@ class Worker:
         return {"output": output.name, "key": key, "size": stored.size}
 
     def handle_proxy(self, session: Session, job: RenderJob, project: Project) -> dict:
-        """Make a copy the browser can actually play.
+        """Everything the timeline draws the footage with, in one job.
 
         The camera original is HEVC in a .mov: no browser will decode it, so
         without this the editor shows a black rectangle and the timeline is
-        useless. The proxy is half resolution H.264 with a moved index, which is
-        what makes scrubbing feel immediate.
+        useless. The proxy is half resolution H.264 with short closed groups
+        of pictures; beside it go the audio peaks and the thumbnail sheets,
+        and a manifest that says where all of it is (`analysis.media`).
         """
+        import json
         import pathlib
         import subprocess
         import tempfile
 
+        from skyground.analysis import audio, media
         from skyground.core.workspace import find_ffmpeg
         from skyground.services import assets as asset_service
 
+        ffmpeg = find_ffmpeg()
         source = self._source_for(session, project, job)
         name, media_type, encoder = PROXY_FORMATS.get(
             self.settings.proxy_codec, PROXY_FORMATS["h264"]
         )
+        codec = "vp9" if name.endswith(".webm") else "h264"
+        quiet = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"]
+        stored: dict[str, tuple] = {}
+
+        def keep(relative: str, path: pathlib.Path, content_type: str, kind: str = "proxy"):
+            key = asset_service.object_key(project, f"proxy/{relative}")
+            item = self.storage.put_file(key, path, content_type)
+            asset_service.register(
+                session, project, key=key, kind=kind, size=item.size, sha256=item.sha256,
+                content_type=content_type, meta={"job": job.id},
+            )
+            stored[relative] = (key, item)
+            return key
+
         with tempfile.TemporaryDirectory(prefix="skyground-proxy-") as temporary:
-            output = pathlib.Path(temporary) / name
+            base = pathlib.Path(temporary)
+            output = base / name
             subprocess.run(
-                [find_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
-                 "-vf", "scale=-2:960", *encoder, str(output)],
+                [*quiet, "-i", str(source), "-vf", f"scale=-2:960,fps={media.PROXY_FPS}",
+                 *encoder, str(output)],
                 check=True,
             )
-            key = asset_service.object_key(project, f"proxy/{name}")
-            stored = self.storage.put_file(key, output, media_type)
+            proxy_key = keep(name, output, media_type)
 
-        asset_service.register(
-            session, project, key=key, kind="proxy", size=stored.size,
-            sha256=stored.sha256, content_type="video/mp4", meta={"job": job.id},
-        )
-        return {"key": key, "size": stored.size}
+            # Peaks: mono 8 kHz PCM straight out of ffmpeg, folded as it streams.
+            decoder = subprocess.Popen(
+                [*quiet, "-i", str(source), "-vn", "-ac", "1",
+                 "-ar", str(media.PEAK_SAMPLE_RATE), "-f", "s16le", "-"],
+                stdout=subprocess.PIPE,
+            )
+            assert decoder.stdout is not None
+            peaks = media.peaks_from_pcm(decoder.stdout)
+            if decoder.wait() != 0:
+                raise StudioError("ffmpeg non ha decodificato l'audio per la forma d'onda")
+            peaks_path = base / "peaks.u8"
+            peaks_path.write_bytes(peaks)
+            peaks_key = keep("peaks.u8", peaks_path, "application/octet-stream")
+
+            # Thumbnails: one a second, tiled into sheets.
+            subprocess.run(
+                [*quiet, "-i", str(source), "-vf", media.thumbnail_filter(), "-q:v", "5",
+                 "-start_number", "0", str(base / "thumbs-%03d.jpg")],
+                check=True,
+            )
+            thumb_keys = [
+                keep(sheet.name, sheet, "image/jpeg")
+                for sheet in sorted(base.glob("thumbs-*.jpg"))
+            ]
+
+            duration = audio.probe_duration(source)
+            index = media.manifest(
+                proxy_key=proxy_key, codec=codec, duration=duration,
+                peaks_key=peaks_key, thumb_keys=thumb_keys,
+                source_sha256=(job.payload or {}).get("sha256", ""),
+            )
+            index_path = base / "index.json"
+            index_path.write_text(json.dumps(index), encoding="utf-8")
+            manifest_key = keep("index.json", index_path, "application/json")
+
+        return {
+            "key": proxy_key,
+            "size": stored[name][1].size,
+            "manifest": manifest_key,
+            "peaks": len(peaks),
+            "thumbs": len(thumb_keys),
+        }
 
     def handle_unsupported(self, session: Session, job: RenderJob, project: Project) -> dict:
         raise NotSupported(

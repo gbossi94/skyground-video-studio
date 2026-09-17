@@ -46,6 +46,7 @@ def read_plan(
     response: Response,
     context: ProjectContext = Depends(project_context),
     storage: ObjectStorage = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
 ) -> dict:
     """The current proposal, or what is missing before there can be one.
 
@@ -55,15 +56,19 @@ def read_plan(
     """
     context.require("document:read")
     if not cuts.has_analysis(context.session, context.project):
-        return {"state": "senza-analisi", "plan": None, "analysis": None}
+        return {
+            "state": "senza-analisi", "plan": None, "analysis": None,
+            "media": media_for(context, storage, settings),
+        }
     analysis = cuts.load_analysis(context.session, context.project)
+    media = media_for(context, storage, settings)
     summary = {
         "source": analysis.source,
         "duration": analysis.duration,
         "words": len(analysis.words),
         "provider": analysis.provider,
         "generatedAt": analysis.generated_at,
-        "proxyUrl": _proxy_url(context, storage),
+        "proxyUrl": media.get("proxy") or _proxy_url(context, storage),
     }
     try:
         plan = cuts.load_plan(context.session, context.project)
@@ -78,6 +83,7 @@ def read_plan(
         "plan": plan.as_dict(),
         "etag": etag,
         "timeline": _timeline_state(context),
+        "media": media,
     }
 
 
@@ -263,6 +269,80 @@ def apply_plan(
         result["job"] = serializers.job_payload(job)
     result["etag"] = cuts.plan_etag(context.session, context.project)
     return result
+
+
+@router.get("/api/projects/{slug}/cut/media")
+def read_media(
+    context: ProjectContext = Depends(project_context),
+    storage: ObjectStorage = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Fresh links to the proxy, the peaks and the thumbnail sheets — or,
+    when the worker has not made them yet, the job that is making them."""
+    context.require("document:read")
+    return media_for(context, storage, settings)
+
+
+@router.post("/api/projects/{slug}/cut/media")
+def make_media(context: ProjectContext = Depends(project_context)) -> dict:
+    """Queue the proxy job, unless one is already pending."""
+    context.require("job:create")
+    from skyground.api import serializers
+
+    pending = _pending_proxy_job(context)
+    if pending is not None:
+        return serializers.job_payload(pending)
+    job = job_service.enqueue(
+        context.session, context.project, kind="proxy", payload={}, actor=context.user,
+    )
+    return serializers.job_payload(job)
+
+
+def _pending_proxy_job(context: ProjectContext):
+    for job in job_service.list_for_project(context.session, context.project, limit=20):
+        if job.kind == "proxy" and job.status in ("queued", "running"):
+            return job
+    return None
+
+
+def media_for(context: ProjectContext, storage: ObjectStorage, settings: Settings) -> dict:
+    """What the timeline draws with, signed for the length of a session.
+
+    The manifest is the source of truth: it names the keys, and the links are
+    minted here at request time, so a client that comes back after the links
+    have expired asks again and gets new ones.
+    """
+    import json
+    import time
+
+    key = asset_service.object_key(context.project, "proxy/index.json")
+    if not storage.exists(key):
+        from skyground.api import serializers
+
+        pending = _pending_proxy_job(context)
+        return {"ready": False, "job": serializers.job_payload(pending) if pending else None}
+    index = json.loads(storage.get(key).decode("utf-8"))
+    ttl = int(settings.proxy_url_ttl_seconds)
+    now = int(time.time())
+
+    def link(object_key: str) -> str:
+        return storage.signed_url(object_key, expires_in=ttl)
+
+    thumbs = dict(index.get("thumbs", {}))
+    keys = thumbs.pop("keys", [])
+    return {
+        "ready": True,
+        "proxy": link(index["proxy"]["key"]),
+        "codec": index["proxy"].get("codec", "h264"),
+        "fps": index["proxy"].get("fps", 30),
+        "gop": index["proxy"].get("gop", 15),
+        "duration": index.get("duration"),
+        "peaks": link(index["peaks"]["key"]),
+        "peaksRate": index["peaks"].get("rate", 100),
+        "thumbs": {"urls": [link(item) for item in keys], **thumbs},
+        "ttl": ttl,
+        "expiresAt": now + ttl,
+    }
 
 
 def _proxy_url(context: ProjectContext, storage: ObjectStorage) -> str | None:

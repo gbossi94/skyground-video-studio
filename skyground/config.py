@@ -93,6 +93,11 @@ class Settings:
     s3: S3Settings = field(default_factory=S3Settings)
     session_ttl_hours: int = 24 * 14
     signed_url_ttl_seconds: int = 900
+    #: The preview proxy, its peaks and its thumbnails are private but low in
+    #: value, and an editing session lasts longer than a quarter of an hour:
+    #: their links live for hours, where the raw take's and the renders' live
+    #: for minutes.
+    proxy_url_ttl_seconds: int = 14400
     host: str = "127.0.0.1"
     port: int = 4173
     cookie_secure: bool = False
@@ -233,6 +238,7 @@ def load_settings(environ: dict | None = None) -> Settings:
         ),
         session_ttl_hours=_int("SKYGROUND_SESSION_TTL_HOURS", 24 * 14),
         signed_url_ttl_seconds=_int("SKYGROUND_SIGNED_URL_TTL_SECONDS", 900),
+        proxy_url_ttl_seconds=_int("SKYGROUND_PROXY_URL_TTL_SECONDS", 14400),
         host=_env("SKYGROUND_HOST", "0.0.0.0" if environment == PRODUCTION else "127.0.0.1"),
         port=_int("PORT", _int("SKYGROUND_PORT", 4173)),
         cookie_secure=_flag("SKYGROUND_COOKIE_SECURE", environment == PRODUCTION),
