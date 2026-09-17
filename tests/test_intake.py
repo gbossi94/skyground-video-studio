@@ -203,6 +203,7 @@ def test_a_project_is_created_from_the_video_in_one_request(client, sign_in, mak
 # ------------------------------------------------------------ render veloce
 
 
+@needs_ffmpeg
 def test_a_plain_film_is_recognised_and_a_card_takes_it_back_to_the_browser(tmp_path):
     ws = Workspace(tmp_path)
     ws.create_project("nuovo-06", "Nuovo", make_video(tmp_path / "girato"))
@@ -213,6 +214,7 @@ def test_a_plain_film_is_recognised_and_a_card_takes_it_back_to_the_browser(tmp_
     assert ws.is_plain("nuovo-06") is False
 
 
+@needs_ffmpeg
 def test_a_project_laid_out_before_the_marker_existed_is_still_plain(tmp_path):
     """The neutral template gained `data-plain-render` after the first
     projects were laid out from it; their composition is the same skeleton
