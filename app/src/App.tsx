@@ -10,6 +10,7 @@ export default function App() {
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [creating, setCreating] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [cut, setCut] = useState<CutState | null>(null);
   const [transcript, setTranscript] = useState<Transcript | null>(null);
   const [selected, setSelected] = useState<Question | null>(null);
@@ -26,7 +27,8 @@ export default function App() {
       try {
         const projects = await api.projects();
         setProjects(projects);
-        if (!projects.length) return setError("Nessun progetto disponibile");
+        setLoaded(true);
+        if (!projects.length) return;
         setProject(projects[0]);
       } catch (cause) {
         // Without a session there is nothing to show here, and the sign-in form
@@ -64,7 +66,33 @@ export default function App() {
     setSelected((current) => queue.find((q) => q.id === current?.id) ?? queue[0] ?? null);
   }, [cut]);
 
+  // The sheet that lays out a project from a raw video has to be reachable
+  // before any project exists: a new account starts with none, and the only
+  // way to get one is this button.
+  const sheet = creating && (
+    <NewProject
+      onClose={() => setCreating(false)}
+      onCreated={(made) => {
+        setProjects((current) => [made, ...current]);
+        setCut(null);
+        setProject(made);
+      }}
+    />
+  );
+
   if (error) return <Empty title="Non riesco a mostrare il montaggio" detail={error} />;
+  if (loaded && !project) {
+    return (
+      <>
+        <Empty
+          title="Nessun montaggio ancora"
+          detail="Carica un video girato e lo studio lo trascrive, lo monta e lo rende da solo."
+          action={{ label: "Nuovo montaggio", onClick: () => setCreating(true) }}
+        />
+        {sheet}
+      </>
+    );
+  }
   if (!project || !cut) return <Empty title="Carico il progetto…" />;
 
   const plan = cut.plan;
@@ -174,12 +202,7 @@ export default function App() {
       </header>
 
       {notice && <div className="notice">{notice}</div>}
-      {creating && (
-        <NewProject
-          onClose={() => setCreating(false)}
-          onCreated={(made) => setProjects((current) => [made, ...current])}
-        />
-      )}
+      {sheet}
 
       {!plan ? (
         <Missing
