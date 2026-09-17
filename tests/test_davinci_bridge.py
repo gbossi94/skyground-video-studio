@@ -30,12 +30,13 @@ TIMELINE = {"source": "assets/raw.mov", "clips": [
 
 def test_clip_ranges_are_frames_of_the_raw_footage_at_its_own_rate(bridge):
     ranges = bridge.clip_ranges(TIMELINE, 29.97)
-    assert ranges[0] == (round(8.376 * 29.97), round(8.376 * 29.97) + round(162 / 30 * 29.97) - 1)
+    assert ranges[0] == (round(8.376 * 29.97), round(8.376 * 29.97) + round(162 / 30 * 29.97))
     assert ranges[1][0] == round(13.907 * 29.97)
-    # 25.575 s → 767 timeline frames → 766 raw frames at 29.97, last inclusive
-    assert ranges[2] == (900, 900 + round(767 / 30 * 29.97) - 1)
-    # At 30 fps the raw frames are the timeline frames.
-    assert bridge.clip_ranges(TIMELINE, 30)[0] == (251, 251 + 162 - 1)
+    # 25.575 s → 767 timeline frames → 766 raw frames at 29.97, end exclusive
+    assert ranges[2] == (900, 900 + round(767 / 30 * 29.97))
+    # At 30 fps the raw frames are the timeline frames: 162 of them, end exclusive,
+    # which is what Resolve 21 lands as 162 (with an inclusive end it landed 161).
+    assert bridge.clip_ranges(TIMELINE, 30)[0] == (251, 251 + 162)
 
 
 class Item:
@@ -48,10 +49,14 @@ class Item:
 
 class Timeline:
     def __init__(self, name):
-        self.name, self.items = name, []
+        self.name, self.items, self.tracks = name, [], []
 
     def GetName(self):
         return self.name
+
+    def AddTrack(self, kind):
+        self.tracks.append(kind)
+        return True
 
 
 class Pool:
@@ -126,15 +131,16 @@ def test_build_makes_the_project_the_timeline_and_the_clips(bridge, tmp_path):
     resolve = Resolve()
     result = bridge.build(resolve, "TEST", fetched(tmp_path))
     project = resolve.manager.projects["TEST"]
-    assert project.settings["timelineResolutionWidth"] == "1080"
-    assert project.settings["timelineResolutionHeight"] == "1920"
-    assert project.settings["timelineFrameRate"] == "30"
+    assert project.settings == {"timelineFrameRate": "30", "timelineResolutionWidth": "1080",
+                                "timelineResolutionHeight": "1920"}  # playback rate is read-only
     assert resolve.storage.added == [str(tmp_path / "raw.mov")]
     clips, subtitles = project.pool.appended
     assert [(c["startFrame"], c["endFrame"]) for c in clips] == bridge.clip_ranges(TIMELINE, 29.97)
     assert all(c["mediaPoolItem"].path == str(tmp_path / "raw.mov") for c in clips)
     assert result == {"project": "TEST", "timeline": "Skyground", "clips": 3, "clip_fps": 29.97, "subtitles": "sì"}
     assert project.pool.imported == [str(tmp_path / "test.srt")]
+    # Resolve only lands an SRT on a timeline that already has a subtitle track.
+    assert project.pool.timelines["Skyground"].tracks == ["subtitle"]
 
 
 def test_a_second_run_never_overwrites_the_timeline_a_hand_may_have_touched(bridge, tmp_path):
@@ -175,3 +181,33 @@ def test_the_script_is_standard_library_only(bridge):
     text = SCRIPT.read_text(encoding="utf-8")
     for forbidden in ("import requests", "import skyground", "from skyground"):
         assert forbidden not in text
+
+
+def test_the_manifest_is_the_cut_as_a_lua_table_for_the_resolve_side(bridge, tmp_path):
+    got = fetched(tmp_path)
+    text = bridge.manifest(got, 'Prova "uno"')
+    assert text.startswith("-- written by Skyground.py")
+    assert 'name = "Prova \\"uno\\"",' in text  # quotes survive as a Lua literal
+    assert "width = 1080, height = 1920, fps = 30," in text
+    assert f'raw = "{tmp_path / "raw.mov"}",' in text
+    assert f'subtitles = "{tmp_path / "test.srt"}",' in text
+    # Each clip: seconds into the raw footage, and the timeline frames the studio decided on.
+    assert "{start = 8.376, frames = 162}," in text
+    assert "{start = 30.025, frames = 767}," in text  # no frames given: from end − start
+    assert text.count("{start = ") == 3
+
+
+def test_write_manifest_puts_the_cut_beside_the_footage_and_a_copy_where_lua_looks(bridge, tmp_path):
+    folder = tmp_path / "Skyground" / "test-260917"
+    folder.mkdir(parents=True)
+    cut = bridge.write_manifest(fetched(tmp_path), "TEST", folder)
+    assert cut == folder / "cut.lua"
+    assert (tmp_path / "Skyground" / "latest.lua").read_text() == cut.read_text()
+
+
+def test_the_lua_side_reads_what_the_python_side_writes():
+    """The two halves agree on the manifest's field names."""
+    lua = (SCRIPT.parent / "Skyground.lua").read_text(encoding="utf-8")
+    for field in ("cut.name", "cut.width", "cut.height", "cut.fps", "cut.raw", "cut.subtitles", "cut.clips", "clip.start", "clip.frames"):
+        assert field in lua
+    assert "latest.lua" in lua
