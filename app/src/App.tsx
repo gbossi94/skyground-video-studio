@@ -172,6 +172,17 @@ export default function App() {
         </div>
         <div className="top-actions">
           {working && <span className="pill working">{describe(working.kind)}…</span>}
+          <a
+            className="ghost link"
+            href={`/api/projects/${project.id}/export/fcpxml`}
+            download
+            title="Il montaggio come timeline per DaVinci Resolve, Premiere Pro e Final Cut Pro (FCPXML); i sottotitoli a parte, in SRT"
+          >
+            Esporta per l'editor
+          </a>
+          <a className="ghost link small" href={`/api/projects/${project.id}/export/srt`} download title="Sottotitoli SRT">
+            SRT
+          </a>
           <button className="ghost" onClick={() => setCreating(true)}>Nuovo montaggio</button>
           {plan && <Status plan={plan} />}
           <button

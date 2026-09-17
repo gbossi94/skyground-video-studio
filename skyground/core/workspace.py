@@ -977,6 +977,32 @@ class Workspace:
             return False
         return not any(angle.get("enabled") for angle in read_json(base / "angles.json"))
 
+    def export_fcpxml(self, project_id: str) -> str:
+        """The cut as FCPXML, for DaVinci Resolve, Premiere Pro and Final Cut Pro."""
+        from skyground.core import export
+
+        project = read_json(self.project_dir(project_id) / "project.json")
+        return export.fcpxml(self.project_dir(project_id), project.get("name") or project_id, read_json=read_json)
+
+    def export_srt(self, project_id: str) -> str:
+        """The captions as SRT, in output time, as the film shows them."""
+        from skyground.core import export
+
+        return export.srt(self.project_dir(project_id), read_json=read_json, caption_groups=caption_groups)
+
+    def export(self, project_id: str, kind: str) -> pathlib.Path:
+        """Write one export into the project's `exports/` folder and return it."""
+        if kind not in ("fcpxml", "srt"):
+            raise ValidationError(f"formato di export sconosciuto: {kind} (fcpxml o srt)")
+        folder = self.project_dir(project_id) / "exports"
+        folder.mkdir(exist_ok=True)
+        target = folder / f"{project_id}.{kind}"
+        target.write_text(
+            self.export_fcpxml(project_id) if kind == "fcpxml" else self.export_srt(project_id),
+            encoding="utf-8",
+        )
+        return target
+
     def render_plain(self, project_id: str, output: pathlib.Path) -> pathlib.Path:
         """The film without a browser: ffmpeg burns what the neutral
         composition would have drawn.

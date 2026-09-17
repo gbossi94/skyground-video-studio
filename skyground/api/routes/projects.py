@@ -111,6 +111,27 @@ def project_status(context: ProjectContext = Depends(project_context)) -> dict:
     return {"assets": assets, "problems": context.documents.problems(context.project)}
 
 
+@router.get("/api/projects/{slug}/export/{kind}")
+def export_cut(kind: str, context: ProjectContext = Depends(project_context)):
+    """The cut for an editor a person already knows: `fcpxml` for DaVinci
+    Resolve, Premiere Pro and Final Cut Pro; `srt` for the captions, which
+    every editor — CapCut included — imports as subtitles."""
+    from fastapi.responses import PlainTextResponse
+
+    context.require("document:read")
+    if kind == "fcpxml":
+        body, media = context.workspace.export_fcpxml(context.project.slug), "application/xml"
+    elif kind == "srt":
+        body, media = context.workspace.export_srt(context.project.slug), "text/plain; charset=utf-8"
+    else:
+        raise ValidationError(f"formato di export sconosciuto: {kind} (fcpxml o srt)")
+    return PlainTextResponse(
+        body,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{context.project.slug}.{kind}"'},
+    )
+
+
 @router.get("/api/projects/{slug}/files/{name}")
 def read_document(
     name: str, response: Response, context: ProjectContext = Depends(project_context)

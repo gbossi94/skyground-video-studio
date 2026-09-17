@@ -39,7 +39,7 @@ button { font: inherit; cursor: pointer; }
 button.primary { border: 0; background: var(--lime); color: #11130b; border-radius: 9px;
   padding: 11px 15px; font-weight: 850; }
 button.primary:disabled { background: #3a3d2c; color: #8d8f80; cursor: not-allowed; }
-button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line);
+button.ghost, a.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line);
   border-radius: 9px; padding: 10px 14px; }
 button.ghost:disabled { color: var(--muted); cursor: not-allowed; }
 
@@ -195,3 +195,4 @@ button.ghost.small { padding: 6px 11px; border-radius: 8px; font-weight: 700; }
 .job .context { font-size: 13px; line-height: 1.5; }
 .pill.working { font-size: 12px; color: var(--muted); padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; animation: breathe 1.6s ease-in-out infinite; }
 @keyframes breathe { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+a.ghost.link { text-decoration: none; display: inline-flex; align-items: center; }

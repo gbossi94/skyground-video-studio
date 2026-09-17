@@ -57,6 +57,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument("--json", action="store_true", help="solo i numeri, per uno script")
 
+    export = subcommands.add_parser(
+        "export", help="scrive il montaggio per un editor: FCPXML (Resolve, Premiere, Final Cut) e SRT"
+    )
+    export.add_argument("project")
+    export.add_argument("--format", choices=["fcpxml", "srt", "all"], default="all")
+
     serve = subcommands.add_parser("serve", help="avvia il pannello")
     serve.add_argument("--host", default=None)
     serve.add_argument("--port", type=int, default=None)
@@ -221,6 +227,11 @@ def run_editorial(args, workspace: Workspace) -> int | None:
         return run_monta(args, workspace)
     if args.command == "evaluate":
         return run_evaluate(args, workspace)
+    if args.command == "export":
+        kinds = ("fcpxml", "srt") if args.format == "all" else (args.format,)
+        for kind in kinds:
+            print(workspace.export(args.project, kind))
+        return 0
     if args.command == "list":
         for project in workspace.list_projects():
             print(f"{project['id']:<32} {project['status']:<12} {project['name']}")
