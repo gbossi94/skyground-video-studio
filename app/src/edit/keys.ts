@@ -18,6 +18,8 @@ export type Action =
   | "end"
   | "previous-boundary"
   | "next-boundary"
+  | "select-previous"
+  | "select-next"
   | "trim-in"
   | "trim-out"
   | "split"
@@ -53,16 +55,18 @@ export const SHORTCUTS: Shortcut[] = [
   { action: "end", keys: "End", what: "fine" },
   { action: "previous-boundary", keys: "[", what: "taglio precedente" },
   { action: "next-boundary", keys: "]", what: "taglio successivo" },
-  { action: "trim-in", keys: "I", what: "l'inizio del pezzo qui" },
-  { action: "trim-out", keys: "O", what: "la fine del pezzo qui" },
-  { action: "split", keys: "S", what: "dividi il pezzo qui" },
-  { action: "remove", keys: "⌫", what: "togli il pezzo selezionato" },
-  { action: "restore", keys: "R", what: "rimetti la parte tolta selezionata" },
+  { action: "select-previous", keys: "↑", what: "seleziona la clip precedente" },
+  { action: "select-next", keys: "↓", what: "seleziona la clip successiva" },
+  { action: "trim-in", keys: "I", what: "l'inizio della clip qui" },
+  { action: "trim-out", keys: "O", what: "la fine della clip qui" },
+  { action: "split", keys: "S", what: "dividi la clip al playhead" },
+  { action: "remove", keys: "⌫", what: "togli la clip selezionata" },
+  { action: "restore", keys: "R", what: "rimetti la parte tolta" },
   { action: "undo", keys: "⌘Z", what: "annulla" },
   { action: "redo", keys: "⇧⌘Z", what: "ripeti" },
   { action: "zoom-in", keys: "+", what: "avvicina" },
   { action: "zoom-out", keys: "−", what: "allontana" },
-  { action: "zoom-fit", keys: "0", what: "tutto il girato" },
+  { action: "zoom-fit", keys: "0", what: "tutto il montaggio" },
   { action: "save", keys: "⌘S", what: "salva adesso" },
   { action: "apply", keys: "⌘↵", what: "applica e rigenera" },
   { action: "help", keys: "?", what: "questa tabella" },
@@ -92,6 +96,8 @@ export function actionFor(event: KeyboardEvent): Action | null {
     case "l": case "L": return "shuttle-forward";
     case "ArrowLeft": return event.shiftKey ? "frames-back" : "frame-back";
     case "ArrowRight": return event.shiftKey ? "frames-forward" : "frame-forward";
+    case "ArrowUp": return "select-previous";
+    case "ArrowDown": return "select-next";
     case "Home": return "home";
     case "End": return "end";
     case "[": return "previous-boundary";

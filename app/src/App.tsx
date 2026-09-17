@@ -1,36 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, type ConflictPayload, type JobSummary, type ProjectSummary } from "./api";
-import { EditorTimeline, type Selection, type TimelineHandle } from "./components/EditorTimeline";
+import { Inspector } from "./components/Inspector";
 import { NewProject } from "./components/NewProject";
-import { Player, type PlayerHandle } from "./components/Player";
+import { Player, type Clock, type PlayerHandle } from "./components/Player";
 import { ENGINE, Questions, reviewQueue } from "./components/Questions";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
-import { formatTime, formatTimecode } from "./components/timeline/time";
+import { Timeline, type Selection, type TimelineHandle } from "./components/Timeline";
+import { formatTime } from "./components/timeline/time";
+import { Transport } from "./components/Transport";
 import { actionFor, type Action } from "./edit/keys";
 import {
-  boundaries,
-  commit,
-  fromPlan,
-  gapAt,
-  historyOf,
-  lastWordUpTo,
-  rangeAt,
-  redo,
-  removeRange,
-  restoreGap,
-  rulesOf,
-  sameCut,
-  segmentsOf,
-  splitRange,
-  toRequest,
-  trimToPlayhead,
-  undo,
-  type EditState,
-  type History,
+  commit, fromPlan, historyOf, redo, removeRange, restoreGap, rulesOf, sameCut, splitRange,
+  toRequest, trimToPlayhead, undo, type EditState, type History,
 } from "./edit/model";
+import { build, clipAt, joins, sourceAt, type CutSource, type Sequence } from "./edit/sequence";
 import type { CutPlan, CutState, Option, Question, Transcript } from "./types";
 
 type SaveState = "salvato" | "non salvato" | "salvataggio…" | "conflitto";
+const EMPTY: Sequence = { clips: [], cuts: [], duration: 0 };
 
 export default function App() {
   const [project, setProject] = useState<ProjectSummary | null>(null);
@@ -40,46 +27,43 @@ export default function App() {
   const [working, setWorking] = useState<JobSummary | null>(null);
   const [cut, setCut] = useState<CutState | null>(null);
   const [transcript, setTranscript] = useState<Transcript | null>(null);
-  const [selected, setSelected] = useState<Question | null>(null);
-  const [playhead, setPlayhead] = useState(0);
+  const [selectedQuestion, setSelectedQuestion] = useState<Question | null>(null);
   const [playing, setPlaying] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [playingOption, setPlayingOption] = useState<string | null>(null);
   const [help, setHelp] = useState(false);
+  const [tab, setTab] = useState<"clip" | "decisioni">("clip");
+  const [snapping, setSnapping] = useState(true);
+  const [zoom, setZoom] = useState({ px: 0, fit: 1 });
 
-  // The edit: what is on the timeline, its history, and what the server has.
   const [history, setHistory] = useState<History | null>(null);
   const [baseline, setBaseline] = useState<EditState | null>(null);
-  const [preview, setPreview] = useState<EditState | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("salvato");
   const [conflict, setConflict] = useState<ConflictPayload | null>(null);
 
   const player = useRef<PlayerHandle>(null);
   const timeline = useRef<TimelineHandle>(null);
-  const segmentsRef = useRef<{ start: number; end: number }[]>([]);
-  const playheadRef = useRef(0);
-  playheadRef.current = playhead;
+  const clock = useRef(0) as Clock;
+  /** The film's length while a drag is in flight, for the readouts that show
+   *  it without waiting for the edit to be committed. */
+  const film = useRef(0) as Clock;
+  const sequenceRef = useRef<Sequence>(EMPTY);
+  const previewRef = useRef<Sequence | null>(null);
 
   useEffect(() => {
     void (async () => {
       try {
-        const projects = await api.projects();
-        setProjects(projects);
+        const list = await api.projects();
+        setProjects(list);
         setLoaded(true);
-        if (!projects.length) return;
-        setProject(projects[0]);
+        if (list.length) setProject(list[0]);
       } catch (cause) {
-        // Without a session there is nothing to show here, and the sign-in form
-        // — which on a fresh studio is the form that creates the first account
-        // — lives on the panel at the root. Send the visitor there instead of
-        // leaving them on a dead end.
-        if (cause instanceof ApiError && cause.status === 401) {
-          window.location.replace("/");
-          return;
-        }
+        // Without a session there is nothing to show here, and the sign-in
+        // form lives on the panel at the root. Send the visitor there.
+        if (cause instanceof ApiError && cause.status === 401) { window.location.replace("/"); return; }
         setError(String(cause));
       }
     })();
@@ -88,24 +72,19 @@ export default function App() {
   const reload = useCallback(async (slug: string) => {
     const state = await api.cut(slug);
     setCut(state);
-    if (state.analysis) {
-      setTranscript(await api.transcript(slug));
-    }
+    if (state.analysis) setTranscript(await api.transcript(slug));
     return state;
   }, []);
 
   useEffect(() => {
     if (!project) return;
-    setHistory(null);
-    setBaseline(null);
-    setSelection(null);
-    setConflict(null);
+    setHistory(null); setBaseline(null); setSelection(null); setConflict(null);
+    clock.current = 0;
     void reload(project.id).catch((cause) => setError(String(cause)));
   }, [project, reload]);
 
-  // The plan from the server is the baseline of the edit. When it changes —
-  // loaded, saved, answered, regenerated — the timeline starts from it again,
-  // unless the person is mid-edit on the same plan (then the history stays).
+  // The plan from the server is the baseline of the edit: when it changes the
+  // timeline starts from it again, unless somebody is mid-edit on the same one.
   useEffect(() => {
     if (!cut?.plan || !transcript) return;
     const fresh = fromPlan(cut.plan, transcript.words);
@@ -118,16 +97,33 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cut?.plan, transcript]);
 
+  const plan = cut?.plan ?? null;
+  const words = transcript?.words ?? [];
+  const sourceDuration = transcript?.duration ?? plan?.sourceDuration ?? 0;
+  const fps = cut?.media?.fps ?? project?.canvas.fps ?? 30;
+  const rules = useMemo(() => (plan ? rulesOf(plan, sourceDuration) : null), [plan, sourceDuration]);
+  const manual = !!(plan && plan.manual && "kept" in plan.manual);
+
+  const source: CutSource = useMemo(() => ({
+    removed: plan?.removed ?? [],
+    engineKept: engineKeptOf(plan),
+    sourceDuration,
+  }), [plan, sourceDuration]);
+
   const state = history?.present ?? null;
+  const sequence = useMemo(
+    () => (state ? build(state, words, source) : EMPTY),
+    [state, words, source],
+  );
+  sequenceRef.current = sequence;
+  if (!previewRef.current) film.current = sequence.duration;
   const dirty = !!(state && baseline && !sameCut(state, baseline));
+
   useEffect(() => {
     setSaveState((current) => (current === "conflitto" ? current : dirty ? "non salvato" : "salvato"));
   }, [dirty]);
-  segmentsRef.current = state ? segmentsOf(preview ?? state) : [];
 
-  // The worker does the slow parts — transcription, the editor model, the
-  // render — and the documents only change when it is done. Poll the queue,
-  // show what is in flight, and reload the state when it lands.
+  // The worker does the slow parts; the documents only change when it is done.
   useEffect(() => {
     if (!project) return;
     let previous: JobSummary | null = null;
@@ -154,32 +150,24 @@ export default function App() {
     return () => { stopped = true; window.clearTimeout(timer); };
   }, [project, reload]);
 
-  // Keep the selection pointing at the freshest copy of the question: the plan
-  // is rebuilt on every answer, so the old object is stale immediately.
   useEffect(() => {
-    if (!cut?.plan) return setSelected(null);
+    if (!cut?.plan) return setSelectedQuestion(null);
     const queue = reviewQueue(cut.plan.questions);
-    setSelected((current) => queue.find((q) => q.id === current?.id) ?? queue[0] ?? null);
+    setSelectedQuestion((current) => queue.find((q) => q.id === current?.id) ?? queue[0] ?? null);
   }, [cut]);
 
-  const plan = cut?.plan ?? null;
-  const duration = transcript?.duration ?? plan?.sourceDuration ?? 0;
-  const fps = cut?.media?.fps ?? project?.canvas.fps ?? 30;
-  const rules = useMemo(() => (plan ? rulesOf(plan, duration) : null), [plan, duration]);
-  const words = transcript?.words ?? [];
+  // --------------------------------------------------------------- commands
 
-  // ------------------------------------------------------------- commands
-
-  const apply = useCallback((label: string, next: EditState | null) => {
+  const change = useCallback((label: string, next: EditState | null) => {
     if (!next) return;
     setHistory((current) => (current ? commit(current, label, next) : current));
-    setSelection(null);
   }, []);
 
-  const seekTo = useCallback((seconds: number) => {
+  const seek = useCallback((output: number) => {
     setPlayingOption(null);
-    player.current?.seek(seconds);
-    setPlayhead(seconds);
+    player.current?.seek(output);
+    timeline.current?.reveal(output);
+    timeline.current?.redraw();
   }, []);
 
   const save = useCallback(async () => {
@@ -217,9 +205,8 @@ export default function App() {
       }
       const result = await api.apply(project.id, { etag, rebuild: true, render: true });
       setNotice(
-        `Montaggio applicato (revisione ${result.revision}): ${result.clips} clip, ${result.duration.toFixed(1)}s` +
-          (result.job ? " · il worker rigenera video, sottotitoli e render" : "") +
-          (result.problems.length ? ` · ${result.problems.length} problemi da guardare` : ""),
+        `Applicato (revisione ${result.revision}): ${result.clips} clip, ${result.duration.toFixed(1)}s` +
+          (result.job ? " · il worker rigenera video, sottotitoli e render" : ""),
       );
       await reload(project.id);
     } catch (cause) {
@@ -232,68 +219,93 @@ export default function App() {
     }
   }, [project, plan, cut?.etag, dirty, save, reload]);
 
+  const selectedClip = selection?.kind === "clip" ? sequence.clips[selection.index] ?? null : null;
+  const selectedCut = selection?.kind === "cut"
+    ? sequence.cuts.find((item) => item.index === selection.index) ?? null
+    : null;
+
+  const splitHere = useCallback(() => {
+    if (!state || !rules) return;
+    const clip = clipAt(sequence, clock.current);
+    if (!clip) return;
+    const at = sourceAt(sequence, clock.current);
+    let after = clip.first;
+    for (let index = clip.first; index < clip.last; index += 1) if (words[index].end <= at) after = index;
+    change("dividi", splitRange(state, words, clip.index, after, rules));
+  }, [state, rules, sequence, words, change]);
+
+  const removeHere = useCallback(() => {
+    if (!state) return;
+    const index = selection?.kind === "clip" ? selection.index : clipAt(sequence, clock.current)?.index ?? null;
+    if (index === null) return;
+    change("togli", removeRange(state, index));
+    setSelection(null);
+  }, [state, selection, sequence, change]);
+
+  const restoreHere = useCallback(() => {
+    if (!state || !rules) return;
+    const gap = selection?.kind === "cut"
+      ? selection.index
+      : sequence.cuts.find((item) => Math.abs(item.at - clock.current) < 0.35)?.index ?? null;
+    if (gap === null) return;
+    change("rimetti", restoreGap(state, words, gap, rules));
+    setSelection(null);
+  }, [state, rules, selection, sequence, words, change]);
+
   const dispatch = useCallback((action: Action) => {
-    const at = playheadRef.current;
     const current = history?.present ?? null;
     switch (action) {
       case "play-toggle": setPlayingOption(null); player.current?.toggle(); return;
       case "shuttle-back": setPlayingOption(null); player.current?.shuttle(-1); return;
       case "pause": player.current?.pause(); return;
       case "shuttle-forward": setPlayingOption(null); player.current?.shuttle(1); return;
-      case "frame-back": player.current?.step(-1); return;
-      case "frame-forward": player.current?.step(1); return;
-      case "frames-back": player.current?.step(-10); return;
-      case "frames-forward": player.current?.step(10); return;
-      case "home": seekTo(0); return;
-      case "end": seekTo(duration); return;
+      case "frame-back": player.current?.step(-1); timeline.current?.redraw(); return;
+      case "frame-forward": player.current?.step(1); timeline.current?.redraw(); return;
+      case "frames-back": player.current?.step(-10); timeline.current?.redraw(); return;
+      case "frames-forward": player.current?.step(10); timeline.current?.redraw(); return;
+      case "home": seek(0); return;
+      case "end": seek(sequence.duration); return;
       case "previous-boundary": {
-        if (!current) return;
-        const before = boundaries(current).filter((point) => point < at - 0.02);
-        if (before.length) seekTo(before[before.length - 1]);
+        const before = joins(sequence).filter((point) => point < clock.current - 0.02);
+        seek(before.length ? before[before.length - 1] : 0);
         return;
       }
       case "next-boundary": {
-        if (!current) return;
-        const after = boundaries(current).find((point) => point > at + 0.02);
-        if (after !== undefined) seekTo(after);
+        const after = joins(sequence).find((point) => point > clock.current + 0.02);
+        if (after !== undefined) seek(after);
+        return;
+      }
+      case "select-previous":
+      case "select-next": {
+        if (!sequence.clips.length) return;
+        const at = selection?.kind === "clip" ? selection.index : clipAt(sequence, clock.current)?.index ?? 0;
+        const next = Math.max(0, Math.min(sequence.clips.length - 1, at + (action === "select-next" ? 1 : -1)));
+        setSelection({ kind: "clip", index: next });
+        seek(sequence.clips[next].outputStart);
         return;
       }
       case "trim-in":
-        if (current && rules) apply("inizio qui", trimToPlayhead(current, words, at, "start", rules));
+        if (current && rules) change("inizio qui", trimToPlayhead(current, words, sourceAt(sequence, clock.current), "start", rules));
         return;
       case "trim-out":
-        if (current && rules) apply("fine qui", trimToPlayhead(current, words, at, "end", rules));
+        if (current && rules) change("fine qui", trimToPlayhead(current, words, sourceAt(sequence, clock.current), "end", rules));
         return;
-      case "split": {
-        if (!current || !rules) return;
-        const index = rangeAt(current, at);
-        if (index === null) return;
-        apply("dividi", splitRange(current, words, index, lastWordUpTo(words, at), rules));
-        return;
-      }
-      case "remove": {
-        if (!current) return;
-        const index = selection?.kind === "range" ? selection.index : rangeAt(current, at);
-        if (index !== null) apply("togli", removeRange(current, index));
-        return;
-      }
-      case "restore": {
-        if (!current || !rules) return;
-        const gap = selection?.kind === "gap" ? selection.index : gapAt(current, at);
-        if (gap !== null) apply("rimetti", restoreGap(current, words, gap, rules));
-        return;
-      }
-      case "undo": setHistory((h) => (h ? undo(h) : h)); return;
-      case "redo": setHistory((h) => (h ? redo(h) : h)); return;
-      case "zoom-in": timeline.current?.zoomBy(1.6); return;
-      case "zoom-out": timeline.current?.zoomBy(1 / 1.6); return;
+      case "split": splitHere(); return;
+      case "remove": removeHere(); return;
+      case "restore": restoreHere(); return;
+      case "undo": setHistory((h) => (h ? undo(h) : h)); setSelection(null); return;
+      case "redo": setHistory((h) => (h ? redo(h) : h)); setSelection(null); return;
+      case "zoom-in": timeline.current?.zoomBy(1.5); return;
+      case "zoom-out": timeline.current?.zoomBy(1 / 1.5); return;
       case "zoom-fit": timeline.current?.fit(); return;
       case "save": if (dirty) void save(); return;
       case "apply": void applyAndRebuild(); return;
       case "help": setHelp((value) => !value); return;
-      case "escape": setHelp(false); setSelection(null); setPlayingOption(null); player.current?.stop(); return;
+      case "escape":
+        setHelp(false); setSelection(null); setPlayingOption(null); player.current?.stop();
+        return;
     }
-  }, [history, rules, words, selection, duration, dirty, apply, seekTo, save, applyAndRebuild]);
+  }, [history, rules, words, sequence, selection, dirty, change, seek, save, applyAndRebuild, splitHere, removeHere, restoreHere]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -307,7 +319,6 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [plan, dispatch]);
 
-  // A dirty edit must not vanish with the tab.
   useEffect(() => {
     if (!dirty) return;
     const guard = (event: BeforeUnloadEvent) => { event.preventDefault(); };
@@ -317,17 +328,10 @@ export default function App() {
 
   // ------------------------------------------------------------------ view
 
-  // The sheet that lays out a project from a raw video has to be reachable
-  // before any project exists: a new account starts with none, and the only
-  // way to get one is this button.
   const sheet = creating && (
     <NewProject
       onClose={() => setCreating(false)}
-      onCreated={(made) => {
-        setProjects((current) => [made, ...current]);
-        setCut(null);
-        setProject(made);
-      }}
+      onCreated={(made) => { setProjects((current) => [made, ...current]); setCut(null); setProject(made); }}
     />
   );
 
@@ -346,36 +350,24 @@ export default function App() {
   }
   if (!project || !cut) return <Empty title="Carico il progetto…" />;
 
-  const source = plan?.source ?? "assets/raw.mov";
-  // The proxy when it exists, the original only as a fallback.
-  const mediaUrl = cut.media?.proxy ?? cut.analysis?.proxyUrl ?? `/media/${project.id}/${source}`;
-  const manual = !!(plan && plan.manual && "kept" in plan.manual);
+  const src = cut.media?.proxy ?? cut.analysis?.proxyUrl ?? `/media/${project.id}/${plan?.source ?? "assets/raw.mov"}`;
+  const open = plan ? plan.questions.filter((q) => !q.resolved).length : 0;
+  const engineDecided = plan ? plan.questions.filter((q) => q.answeredBy === ENGINE).length : 0;
 
   const run = async (label: string, action: () => Promise<unknown>) => {
-    setBusy(label);
-    setNotice(null);
-    try {
-      await action();
-    } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(null);
-    }
+    setBusy(label); setNotice(null);
+    try { await action(); }
+    catch (cause) { setNotice(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setBusy(null); }
   };
-
   const takePlan = (result: { plan: CutPlan; etag?: string }) =>
-    setCut((current) =>
-      current ? { ...current, state: result.plan.status, plan: result.plan, etag: result.etag ?? current.etag } : current,
-    );
-
-  const answer = (question: Question, option: string) =>
-    run(question.id, async () => takePlan(await api.answer(project.id, question.id, option)));
+    setCut((current) => (current ? { ...current, state: result.plan.status, plan: result.plan, etag: result.etag ?? current.etag } : current));
 
   return (
-    <div className="app">
-      <header className="top">
-        <div>
-          <p className="eyebrow">MONTAGGIO AUTOMATICO</p>
+    <div className="editor">
+      <header className="bar">
+        <div className="bar-left">
+          <span className="mark" aria-hidden>S</span>
           {projects.length > 1 ? (
             <select
               className="picker"
@@ -391,60 +383,23 @@ export default function App() {
           ) : (
             <h1>{project.name}</h1>
           )}
+          {plan && (
+            <Meter film={film} source={sourceDuration} />
+          )}
         </div>
-        <div className="top-actions">
-          {working && <span className="pill working">{describe(working.kind)}…</span>}
-          <a
-            className="ghost link"
-            href={`/api/projects/${project.id}/export/fcpxml`}
-            download
-            title="Il montaggio come timeline per DaVinci Resolve, Premiere Pro e Final Cut Pro (FCPXML); i sottotitoli a parte, in SRT"
-          >
-            Esporta per l'editor
-          </a>
-          <a className="ghost link small" href={`/api/projects/${project.id}/export/srt`} download title="Sottotitoli SRT">
-            SRT
-          </a>
-          <button className="ghost" onClick={() => setCreating(true)}>Nuovo montaggio</button>
-          {plan && <Status plan={plan} manual={manual} />}
+
+        <div className="bar-right">
+          {working && <span className="chip live">{describe(working.kind)}…</span>}
+          {plan && <span className={`chip save ${saveState.replace("…", "")}`}>{saveState}</span>}
+          <div className="menu">
+            <button className="btn ghost" onClick={() => setCreating(true)}>Nuovo</button>
+            <a className="btn ghost" href={`/api/projects/${project.id}/export/fcpxml`} download title="Timeline per DaVinci Resolve, Premiere, Final Cut">FCPXML</a>
+            <a className="btn ghost" href={`/api/projects/${project.id}/export/srt`} download title="Sottotitoli">SRT</a>
+          </div>
           <button
-            className="ghost"
-            disabled={busy !== null || manual}
-            title={manual ? "Il montaggio è stato corretto a mano: rigenerarlo lo perderebbe. «Riparti da zero» lo butta via e ricalcola." : "Ricalcola tenendo le scelte fatte a mano"}
-            onClick={() => run("propose", async () => takePlan(await api.propose(project.id)))}
-          >
-            Rigenera proposta
-          </button>
-          <button
-            className="ghost"
-            disabled={busy !== null || (handAnswers(plan) === 0 && !manual)}
-            title={
-              manual
-                ? "Butta via le correzioni a mano e riparte dal girato"
-                : handAnswers(plan) > 0
-                  ? `Butta via ${handAnswers(plan)} scelte fatte a mano e riparte dal girato`
-                  : "Non c'è nessuna scelta fatta a mano da buttare"
-            }
-            onClick={() => {
-              if (!window.confirm("Ripartire dal girato butta via ogni correzione fatta a mano. Procedo?")) return;
-              void run("propose", async () => {
-                takePlan(await api.propose(project.id, false));
-                setNotice("Ripartito dal girato: tutte le scelte sono di nuovo del motore.");
-              });
-            }}
-          >
-            Riparti da zero
-          </button>
-          <button
-            className="primary"
-            disabled={busy !== null || !plan || (!manual && plan.stats.openQuestions > 0) || !!working}
-            title={
-              working
-                ? "Il worker sta ancora lavorando su questo progetto"
-                : plan && !manual && plan.stats.openQuestions > 0
-                  ? "Restano decisioni aperte"
-                  : "Scrive la timeline del progetto e rigenera video, sottotitoli e render (⌘↵)"
-            }
+            className="btn primary"
+            disabled={busy !== null || !plan || (!manual && open > 0) || !!working}
+            title={working ? "Il worker sta ancora lavorando" : open > 0 && !manual ? `Restano ${open} decisioni aperte` : "Scrive la timeline e rigenera tutto (⌘↵)"}
             onClick={() => void applyAndRebuild()}
           >
             {busy === "apply" ? "Applico…" : "Applica e rigenera"}
@@ -452,47 +407,27 @@ export default function App() {
         </div>
       </header>
 
-      {notice && <div className="notice">{notice}</div>}
+      {notice && <div className="notice" onClick={() => setNotice(null)} role="status">{notice}</div>}
       {conflict && (
-        <div className="notice conflict">
-          Qualcun altro ha modificato il montaggio nel frattempo.{" "}
-          <button
-            className="ghost small"
-            onClick={() => {
-              setCut((current) => (current ? { ...current, plan: conflict.current, etag: conflict.etag } : current));
-              setHistory(null);
-              setConflict(null);
-              setSaveState("salvato");
-            }}
-          >
-            Prendi la loro versione
-          </button>{" "}
-          <button
-            className="ghost small"
-            onClick={() => {
-              setCut((current) => (current ? { ...current, etag: conflict.etag } : current));
-              setConflict(null);
-              setSaveState("non salvato");
-              window.setTimeout(() => void save(), 0);
-            }}
-          >
-            Sovrascrivi con la mia
-          </button>
+        <div className="notice warn">
+          Qualcun altro ha modificato il montaggio.
+          <button className="btn tiny" onClick={() => {
+            setCut((current) => (current ? { ...current, plan: conflict.current, etag: conflict.etag } : current));
+            setHistory(null); setConflict(null); setSaveState("salvato");
+          }}>Prendi la loro</button>
+          <button className="btn tiny ghost" onClick={() => {
+            setCut((current) => (current ? { ...current, etag: conflict.etag } : current));
+            setConflict(null); setSaveState("non salvato");
+            window.setTimeout(() => void save(), 0);
+          }}>Sovrascrivi</button>
         </div>
       )}
       {sheet}
       {help && <ShortcutsHelp onClose={() => setHelp(false)} />}
 
       {working && !plan ? (
-        <Empty
-          title={`Lo studio sta lavorando: ${describe(working.kind)}`}
-          detail={
-            working.status === "queued"
-              ? "In coda: parte appena il worker è libero."
-              : "In corso nel worker. Questa pagina si aggiorna da sola quando ha finito."
-          }
-        />
-      ) : !plan ? (
+        <Empty title={`Lo studio sta lavorando: ${describe(working.kind)}`} detail={working.status === "queued" ? "In coda: parte appena il worker è libero." : "In corso. La pagina si aggiorna da sola."} />
+      ) : !plan || !state || !rules ? (
         <Missing
           state={cut.state}
           busy={busy !== null}
@@ -500,207 +435,214 @@ export default function App() {
           onPropose={() => run("propose", async () => takePlan(await api.propose(project.id)))}
         />
       ) : (
-        <main className="workspace">
-          <section className="stage">
-            <Player
-              ref={player}
-              src={mediaUrl}
-              fps={fps}
-              getSegments={() => segmentsRef.current}
-              onTime={setPlayhead}
-              onPlayingChange={(value) => {
-                setPlaying(value);
-                if (!value) setPlayingOption(null);
-              }}
-              onError={(message) => setNotice(message)}
-            />
-            <div className="transport">
-              <div className="transport-keys">
-                <button title="Indietro (J)" onClick={() => dispatch("shuttle-back")}>◀◀</button>
-                <button title="Un fotogramma indietro (←)" onClick={() => dispatch("frame-back")}>◀</button>
-                <button
-                  className="play"
-                  disabled={!mediaUrl}
-                  title="Riproduci / pausa il montaggio (spazio)"
-                  onClick={() => dispatch("play-toggle")}
-                >
-                  {playing && !playingOption ? "◼" : "▶"}
-                </button>
-                <button title="Un fotogramma avanti (→)" onClick={() => dispatch("frame-forward")}>▶</button>
-                <button title="Avanti (L)" onClick={() => dispatch("shuttle-forward")}>▶▶</button>
-              </div>
-              <span className="timecode" title="minuti:secondi:fotogrammi nel girato">
-                {formatTimecode(playhead, fps)}
-              </span>
-              <span className="hint">
-                salta le parti tolte · {state ? formatTime(segmentsOf(state).reduce((sum, s) => sum + s.end - s.start, 0)) : ""} montati
-              </span>
-              {!cut.media?.ready && !cut.media?.job && (
-                <button
-                  className="ghost small"
-                  title="Prepara il proxy, la forma d'onda e le miniature"
-                  onClick={() => run("media", async () => { await api.requestMedia(project.id); setNotice("Anteprima in preparazione nel worker."); })}
-                >
-                  Prepara anteprima
-                </button>
-              )}
-            </div>
-          </section>
-
-          <Questions
-            questions={plan.questions}
-            selected={selected}
-            busy={busy}
-            playingOption={playingOption}
-            onSelect={(question) => {
-              setSelected(question);
-              seekTo(question.at);
-            }}
-            onAnswer={answer}
-            onListen={(question, option: Option) => {
-              if (option.start === undefined || option.end === undefined) return;
-              if (playingOption === option.id) {
-                setPlayingOption(null);
-                player.current?.stop();
-                return;
-              }
-              setSelected(question);
-              setPlayingOption(option.id);
-              player.current?.playRange(option.start, option.end);
-            }}
-          />
-
-          {transcript && state && rules && (
-            <div className="timeline">
-              <div className="timeline-bar">
-                <span className="eyebrow">TIMELINE DEL GIRATO</span>
-                <div className="zoom">
-                  <button onClick={() => dispatch("zoom-out")} aria-label="Riduci zoom">−</button>
-                  <button onClick={() => dispatch("zoom-fit")} aria-label="Tutto il girato">⊡</button>
-                  <button onClick={() => dispatch("zoom-in")} aria-label="Aumenta zoom">+</button>
-                </div>
-                <div className="undo">
-                  <button
-                    disabled={!history?.past.length}
-                    title={history?.past.length ? `Annulla: ${history.label} (⌘Z)` : "Niente da annullare"}
-                    onClick={() => dispatch("undo")}
-                  >
-                    ↶ annulla
-                  </button>
-                  <button
-                    disabled={!history?.future.length}
-                    title={history?.future.length ? `Ripeti: ${history.future[0].label} (⇧⌘Z)` : "Niente da ripetere"}
-                    onClick={() => dispatch("redo")}
-                  >
-                    ripeti ↷
-                  </button>
-                </div>
-                <button className="ghost small" onClick={() => setHelp(true)} title="Scorciatoie (?)">?</button>
-                <div className={`save ${saveState === "non salvato" ? "dirty" : saveState === "conflitto" ? "conflict" : ""}`} style={{ marginLeft: "auto" }}>
-                  <span>{saveState}</span>
-                  <button disabled={!dirty || saveState === "salvataggio…"} onClick={() => void save()} title="Salva le correzioni (⌘S)">
-                    Salva
-                  </button>
-                </div>
-              </div>
-              <EditorTimeline
-                ref={timeline}
-                state={state}
-                preview={preview}
-                words={words}
-                silences={transcript.silences}
-                duration={duration}
+        <>
+          <main className="stage">
+            <section className="viewer">
+              <Player
+                ref={player}
+                src={src}
                 fps={fps}
-                rules={rules}
-                removed={plan.removed}
-                engineKept={engineKeptOf(plan)}
-                questions={plan.questions}
-                selectedQuestion={selected}
-                media={cut.media}
-                playhead={playhead}
-                playing={playing}
-                selection={selection}
-                onSeek={seekTo}
-                onSelect={setSelection}
-                onSelectQuestion={(question) => { setSelected(question); seekTo(question.at); }}
-                onPreview={setPreview}
-                onCommit={apply}
+                clock={clock}
+                getSequence={() => previewRef.current ?? sequenceRef.current}
+                onPlayingChange={(value) => { setPlaying(value); if (!value) setPlayingOption(null); }}
+                onError={(message) => setNotice(message)}
               />
+              <Transport
+                clock={clock}
+                duration={film}
+                fps={fps}
+                playing={playing}
+                disabled={!src}
+                onAction={(what) => {
+                  if (what === "toggle") dispatch("play-toggle");
+                  else if (what === "frame-back") dispatch("frame-back");
+                  else if (what === "frame-forward") dispatch("frame-forward");
+                  else if (what === "prev-cut") dispatch("previous-boundary");
+                  else dispatch("next-boundary");
+                }}
+              />
+            </section>
+
+            <aside className="panel">
+              <div className="tabs" role="tablist">
+                <button role="tab" aria-selected={tab === "clip"} className={tab === "clip" ? "on" : ""} onClick={() => setTab("clip")}>Selezione</button>
+                <button role="tab" aria-selected={tab === "decisioni"} className={tab === "decisioni" ? "on" : ""} onClick={() => setTab("decisioni")}>
+                  Decisioni {plan.questions.length > 0 && <i className={open > 0 ? "count open" : "count"}>{open > 0 ? open : engineDecided}</i>}
+                </button>
+              </div>
+              <div className="panel-body">
+                {tab === "clip" ? (
+                  <Inspector
+                    clip={selectedClip}
+                    cut={selectedCut}
+                    words={words}
+                    fps={fps}
+                    onSplit={splitHere}
+                    onRemove={removeHere}
+                    onRestore={restoreHere}
+                    onListen={() => {
+                      if (!selectedCut) return;
+                      const from = sourceAt(sequence, selectedCut.at);
+                      player.current?.playRange(Math.max(0, from - selectedCut.removed - 0.4), from + 0.6);
+                    }}
+                  />
+                ) : (
+                  <Questions
+                    questions={plan.questions}
+                    selected={selectedQuestion}
+                    busy={busy}
+                    playingOption={playingOption}
+                    onSelect={(question) => { setSelectedQuestion(question); seek(outputOf(sequence, question.at)); }}
+                    onAnswer={(question, option) =>
+                      run(question.id, async () => takePlan(await api.answer(project.id, question.id, option)))
+                    }
+                    onListen={(question, option: Option) => {
+                      if (option.start === undefined || option.end === undefined) return;
+                      if (playingOption === option.id) { setPlayingOption(null); player.current?.stop(); return; }
+                      setSelectedQuestion(question);
+                      setPlayingOption(option.id);
+                      player.current?.playRange(option.start, option.end);
+                    }}
+                  />
+                )}
+              </div>
+            </aside>
+          </main>
+
+          <section className="track-panel">
+            <div className="tools">
+              <div className="group">
+                <button className="tool" disabled={!history?.past.length} title={history?.past.length ? `Annulla: ${history.label} (⌘Z)` : "Niente da annullare"} onClick={() => dispatch("undo")} aria-label="Annulla">↶</button>
+                <button className="tool" disabled={!history?.future.length} title={history?.future.length ? `Ripeti: ${history.future[0].label} (⇧⌘Z)` : "Niente da ripetere"} onClick={() => dispatch("redo")} aria-label="Ripeti">↷</button>
+              </div>
+              <div className="group">
+                <button className="tool" title="Dividi al playhead (S)" onClick={splitHere} disabled={!clipAt(sequence, clock.current)}>Dividi</button>
+                <button className="tool" title="Togli la clip (⌫)" onClick={removeHere} disabled={selection?.kind !== "clip" && !clipAt(sequence, clock.current)}>Togli</button>
+                <button className="tool" title="Rimetti quello che è stato tolto (R)" onClick={restoreHere} disabled={selection?.kind !== "cut"}>Rimetti</button>
+              </div>
+              <button className={snapping ? "tool on" : "tool"} title="Aggancio alle parole e ai silenzi" onClick={() => setSnapping((value) => !value)} aria-pressed={snapping}>
+                Aggancio
+              </button>
+              <div className="spacer" />
+              {dirty && (
+                <button className="btn tiny" onClick={() => void save()} disabled={saveState === "salvataggio…"} title="Salva le correzioni (⌘S)">Salva</button>
+              )}
+              <button className="tool" title="Scorciatoie (?)" onClick={() => setHelp(true)} aria-label="Scorciatoie">?</button>
+              <div className="group zoom">
+                <button className="tool" onClick={() => dispatch("zoom-out")} aria-label="Allontana">−</button>
+                <input
+                  type="range" min={0} max={1} step={0.001}
+                  value={zoomValue(zoom)}
+                  aria-label="Zoom"
+                  onChange={(event) => {
+                    const wanted = zoomFrom(Number(event.target.value), zoom.fit);
+                    timeline.current?.zoomBy(wanted / (zoom.px || zoom.fit));
+                  }}
+                />
+                <button className="tool" onClick={() => dispatch("zoom-in")} aria-label="Avvicina">+</button>
+                <button className="tool" onClick={() => dispatch("zoom-fit")} title="Tutto il montaggio (0)">Adatta</button>
+              </div>
             </div>
-          )}
-        </main>
+
+            <Timeline
+              ref={timeline}
+              state={state}
+              words={words}
+              silences={transcript?.silences ?? []}
+              rules={rules}
+              source={source}
+              media={cut.media}
+              fps={fps}
+              questions={plan.questions}
+              selection={selection}
+              playhead={clock}
+              playing={playing}
+              snapping={snapping}
+              onScrub={(output) => { setPlayingOption(null); player.current?.seek(output); }}
+              onSelect={(next) => { setSelection(next); if (next) setTab("clip"); }}
+              onCommit={change}
+              onPreview={(preview) => {
+                previewRef.current = preview?.sequence ?? null;
+                film.current = preview?.sequence.duration ?? sequence.duration;
+              }}
+              onZoom={(px, fit) => setZoom({ px, fit })}
+            />
+          </section>
+        </>
       )}
     </div>
   );
 }
 
+// ------------------------------------------------------------------ pieces
+
+/** The film's length, beside the footage's. Written from an animation frame
+ *  so a trim shows its effect on the whole film while the hand is moving. */
+function Meter({ film, source }: { film: Clock; source: number }) {
+  const readout = useRef<HTMLElement>(null);
+  useEffect(() => {
+    let frame = 0;
+    let shown = -1;
+    const tick = () => {
+      frame = requestAnimationFrame(tick);
+      const now = Math.round(film.current * 10);
+      if (now === shown || !readout.current) return;
+      shown = now;
+      readout.current.textContent = formatTime(film.current);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [film]);
+  return (
+    <span className="meter" title="Durata del montaggio, e del girato da cui viene">
+      <b ref={readout}>{formatTime(film.current)}</b>
+      <i>da {formatTime(source)}</i>
+    </span>
+  );
+}
+
 /** Which words the engine kept before anyone touched the cut: remembered by
  *  the manual layer once there is one, read off the segments until then. */
-function engineKeptOf(plan: CutPlan): [number, number][] {
+function engineKeptOf(plan: CutPlan | null): [number, number][] {
+  if (!plan) return [];
   if (plan.manual && "engineKept" in plan.manual) return plan.manual.engineKept;
   return plan.segments
     .filter((segment) => segment.firstWord !== null && segment.lastWord !== null)
     .map((segment) => [segment.firstWord as number, segment.lastWord as number]);
 }
 
-/** How many choices a person made by hand. Those are the sticky ones: a
- *  rebuild never overturns them, which is why there has to be a way out. */
-function handAnswers(plan: CutPlan | null): number {
-  if (!plan) return 0;
-  return plan.questions.filter(
-    (question) => question.answer !== null && question.answeredBy !== ENGINE,
-  ).length;
+function outputOf(sequence: Sequence, source: number): number {
+  for (const clip of sequence.clips) {
+    if (source < clip.start) return clip.outputStart;
+    if (source <= clip.end) return clip.outputStart + (source - clip.start);
+  }
+  return sequence.duration;
 }
 
-function Status({ plan, manual }: { plan: CutPlan; manual: boolean }) {
-  const removed = Math.round(plan.stats.removedShare * 100);
-  const tone = plan.status === "ready" ? "ok" : plan.status === "applied" ? "done" : "draft";
-  // "Pronto" on its own would hide the judgement calls the engine made to get
-  // there. Say how many, so the number is an invitation to look at them.
-  const byEngine = plan.questions.filter((question) => question.answeredBy === ENGINE).length;
-  const state = manual
-    ? "corretto a mano"
-    : plan.stats.openQuestions > 0
-      ? `${plan.stats.openQuestions} da decidere`
-      : byEngine > 0
-        ? `pronto · ${byEngine} decise dal motore`
-        : "pronto";
-  return (
-    <div className={`status ${tone}`}>
-      <b>
-        {formatTime(plan.stats.sourceDuration)} → {formatTime(plan.stats.outputDuration)}
-      </b>
-      <span>
-        −{removed}% · {plan.stats.segments} segmenti · {state}
-      </span>
-    </div>
-  );
+/** The zoom slider runs on a log scale: linear, the useful range is a sliver. */
+function zoomValue(zoom: { px: number; fit: number }): number {
+  const px = zoom.px || zoom.fit;
+  return Math.max(0, Math.min(1, Math.log(px / zoom.fit) / Math.log(600 / zoom.fit)));
+}
+function zoomFrom(value: number, fit: number): number {
+  return fit * Math.pow(600 / fit, value);
 }
 
-/** What a job of this kind is doing, in the words of the person waiting. */
 function describe(kind: string): string {
   switch (kind) {
-    case "full": return "montaggio completo (trascrizione, montaggio, render)";
-    case "rebuild": return "rigenerazione (video, sottotitoli, render)";
+    case "full": return "montaggio completo";
+    case "rebuild": return "rigenerazione";
     case "analyze": return "trascrizione del girato";
     case "render": return "render del film";
     case "proxy": return "anteprima del girato";
-    case "sync": return "sincronizzazione della composizione";
-    case "validate": return "validazione del progetto";
+    case "sync": return "sincronizzazione";
+    case "validate": return "validazione";
     default: return kind;
   }
 }
 
-function Missing({
-  state,
-  busy,
-  onAnalyze,
-  onPropose,
-}: {
-  state: string;
-  busy: boolean;
-  onAnalyze: () => void;
-  onPropose: () => void;
+function Missing({ state, busy, onAnalyze, onPropose }: {
+  state: string; busy: boolean; onAnalyze: () => void; onPropose: () => void;
 }) {
   if (state === "senza-analisi") {
     return (
@@ -720,24 +662,14 @@ function Missing({
   );
 }
 
-function Empty({
-  title,
-  detail,
-  action,
-}: {
-  title: string;
-  detail?: string;
-  action?: { label: string; onClick: () => void; disabled?: boolean };
+function Empty({ title, detail, action }: {
+  title: string; detail?: string; action?: { label: string; onClick: () => void; disabled?: boolean };
 }) {
   return (
-    <div className="empty">
+    <div className="blank">
       <h2>{title}</h2>
       {detail && <p>{detail}</p>}
-      {action && (
-        <button className="primary" onClick={action.onClick} disabled={action.disabled}>
-          {action.label}
-        </button>
-      )}
+      {action && <button className="btn primary" onClick={action.onClick} disabled={action.disabled}>{action.label}</button>}
     </div>
   );
 }
