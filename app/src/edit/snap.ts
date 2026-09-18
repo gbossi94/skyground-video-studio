@@ -49,10 +49,22 @@ export function snap(
   pxPerSec: number,
   magnetPx = 8,
 ): number {
+  return snapped(seconds, context, sortedCandidates, pxPerSec, magnetPx).at;
+}
+
+/** The same, saying whether the magnet took the edge: the timeline shows it. */
+export function snapped(
+  seconds: number,
+  context: SnapContext,
+  sortedCandidates: number[],
+  pxPerSec: number,
+  magnetPx = 8,
+): { at: number; magnet: boolean } {
   let at = Math.min(Math.max(seconds, 0), context.duration);
   const reach = magnetPx / Math.max(pxPerSec, 1e-6);
   const nearest = nearestOf(sortedCandidates, at);
-  if (nearest !== null && Math.abs(nearest - at) <= reach) at = nearest;
+  const magnet = nearest !== null && Math.abs(nearest - at) <= reach;
+  if (magnet) at = nearest;
 
   const inside = wordAround(context.words, at);
   if (inside !== null) {
@@ -63,7 +75,7 @@ export function snap(
     const framed = quantiseToFrame(at, context.fps);
     if (wordAround(context.words, framed) === null) at = framed;
   }
-  return Math.min(Math.max(at, 0), context.duration);
+  return { at: Math.min(Math.max(at, 0), context.duration), magnet };
 }
 
 function nearestOf(sorted: number[], value: number): number | null {

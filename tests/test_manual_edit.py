@@ -74,6 +74,43 @@ def test_a_boundary_dragged_into_a_word_stops_at_the_edge_of_the_word(restarted)
     assert invariants.check(again, restarted) == []
 
 
+def test_a_free_edge_stays_inside_the_word_and_only_that_edge_is_exempt(restarted):
+    plan = plan_cut(restarted, POLICY)
+    kept = manual.from_plan(plan, restarted.words)
+    first = kept[0]
+    word = restarted.words[first.first]
+    inside = word.t + 0.1
+    moved = [
+        manual.Kept(first.first, first.last, inside, first.end, free_start=True)
+    ] + kept[1:]
+    again = realised(restarted, moved, plan)
+    assert again.segments[0].start == pytest.approx(inside, abs=0.002)
+    assert again.manual["freeEdges"] == [pytest.approx(inside, abs=0.002)]
+    assert again.manual["kept"][0]["freeStart"] is True
+    assert invariants.check(again, restarted) == []
+    # Read back, the flag survives: the next edit does not snap it away.
+    assert manual.from_plan(again, restarted.words)[0].free_start is True
+
+
+def test_a_free_edge_leaves_at_least_a_frame_of_its_word(restarted):
+    plan = plan_cut(restarted, POLICY)
+    kept = manual.from_plan(plan, restarted.words)
+    last = kept[-1]
+    word = restarted.words[last.last]
+    moved = kept[:-1] + [manual.Kept(last.first, last.last, last.start, word.t, free_end=True)]
+    again = realised(restarted, moved, plan)
+    assert again.segments[-1].end == pytest.approx(word.t + manual.FRAME, abs=0.002)
+    assert invariants.check(again, restarted) == []
+
+
+def test_the_engine_gets_no_exemption_for_an_edge_inside_a_word(restarted):
+    plan = plan_cut(restarted, POLICY)
+    word = restarted.words[plan.segments[0].first_word]
+    plan.segments[0].start = word.t + 0.05
+    rules = {violation.rule for violation in invariants.check(plan, restarted)}
+    assert "taglio-dentro-una-parola" in rules
+
+
 def test_a_boundary_dragged_into_the_gap_stays_where_it_was_put(restarted):
     plan = plan_cut(restarted, POLICY)
     kept = manual.from_plan(plan, restarted.words)

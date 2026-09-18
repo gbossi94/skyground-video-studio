@@ -114,6 +114,16 @@ def _minimum_length(plan: CutPlan, min_segment: float) -> list[Violation]:
     ]
 
 
+def _free_edges(plan: CutPlan) -> list[float]:
+    """Boundaries a person put inside a word by hand (`manual.Kept.free_*`).
+    The engine never gets this exemption: only a hand edit carries the list."""
+    return [float(edge) for edge in (plan.manual or {}).get("freeEdges", [])]
+
+
+def _is_free(position: float, free: list[float]) -> bool:
+    return any(abs(position - edge) <= EPSILON for edge in free)
+
+
 def _never_inside_a_word(plan: CutPlan, analysis: Analysis) -> list[Violation]:
     """No cut lands in the middle of a spoken word.
 
@@ -122,10 +132,13 @@ def _never_inside_a_word(plan: CutPlan, analysis: Analysis) -> list[Violation]:
     """
     problems = []
     boundaries = []
+    free = _free_edges(plan)
     for index, segment in enumerate(plan.segments):
         boundaries.append((segment.start, f"inizio del segmento {index}"))
         boundaries.append((segment.end, f"fine del segmento {index}"))
     for position, where in boundaries:
+        if _is_free(position, free):
+            continue
         for word in analysis.words:
             if word.t + EPSILON < position < word.end - EPSILON:
                 problems.append(
@@ -141,7 +154,10 @@ def _never_inside_a_word(plan: CutPlan, analysis: Analysis) -> list[Violation]:
 def _words_are_whole(plan: CutPlan, analysis: Analysis) -> list[Violation]:
     """Every word is entirely kept or entirely removed, never half of each."""
     problems = []
+    free = _free_edges(plan)
     for word in analysis.words:
+        if any(word.t < edge < word.end for edge in free):
+            continue  # a person split it on purpose
         inside = _overlap_with_segments(word.t, word.end, plan)
         if inside <= EPSILON:
             continue  # fully removed: fine

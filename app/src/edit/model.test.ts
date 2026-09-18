@@ -39,7 +39,7 @@ const WORDS: Word[] = [
   ...speak(15.0, "Non importa quanto premi non ti muovi."), // 21..27
 ];
 const DURATION = 20.0;
-const RULES: Rules = { leadIn: 0.12, leadOut: 0.28, minSegment: 0.35, duration: DURATION };
+const RULES: Rules = { leadIn: 0.12, leadOut: 0.28, minSegment: 0.35, duration: DURATION, frame: 1 / 30 };
 
 /** The engine kept the second and third sentences. */
 const STATE: EditState = {
@@ -213,5 +213,42 @@ describe("undo and redo", () => {
     history = commit(history, "dividi", splitRange(STATE, WORDS, 1, 23, RULES)!);
     expect(history.future).toEqual([]);
     expect(history.present.kept).toHaveLength(3);
+  });
+});
+
+describe("a free edge (⌘-drag)", () => {
+  it("stops inside a word and keeps that word in the range", () => {
+    const word = WORDS[9];
+    const inside = word.t + 0.1;
+    const next = moveBoundary(STATE, WORDS, 0, "start", inside, RULES, { free: true })!;
+    expect(next.kept[0].first).toBe(9);
+    expect(next.kept[0].start).toBeCloseTo(inside, 6);
+    expect(next.kept[0].freeStart).toBe(true);
+    expect(toRequest(next)[0]).toMatchObject({ freeStart: true });
+  });
+
+  it("leaves at least a frame of the word it cuts into", () => {
+    const word = WORDS[20];
+    const next = moveBoundary(STATE, WORDS, 0, "end", word.t + 0.01, RULES, { free: true })!;
+    expect(next.kept[0].last).toBe(20);
+    expect(next.kept[0].end).toBeCloseTo(word.t + RULES.frame, 6);
+    expect(next.kept[0].freeEnd).toBe(true);
+  });
+
+  it("without ⌘ the same drag stops at the word's edge and the flag goes", () => {
+    const free = moveBoundary(STATE, WORDS, 0, "start", WORDS[9].t + 0.1, RULES, { free: true })!;
+    const snapped = moveBoundary(free, WORDS, 0, "start", WORDS[9].t + 0.1, RULES)!;
+    expect(snapped.kept[0].start).toBeCloseTo(WORDS[9].t, 6);
+    expect(snapped.kept[0].freeStart).toBe(false);
+  });
+
+  it("is read back as free from a plan", () => {
+    const free = moveBoundary(STATE, WORDS, 0, "start", WORDS[9].t + 0.1, RULES, { free: true })!;
+    const asPlan = {
+      segments: free.kept.map((range, index) => ({
+        start: range.start, end: range.end, label: `s${index}`, firstWord: range.first, lastWord: range.last,
+      })),
+    } as unknown as CutPlan;
+    expect(fromPlan(asPlan, WORDS).kept[0].freeStart).toBe(true);
   });
 });

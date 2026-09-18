@@ -30,6 +30,7 @@ export type Action =
   | "zoom-in"
   | "zoom-out"
   | "zoom-fit"
+  | "toggle-snap"
   | "save"
   | "apply"
   | "help"
@@ -67,6 +68,7 @@ export const SHORTCUTS: Shortcut[] = [
   { action: "zoom-in", keys: "+", what: "avvicina" },
   { action: "zoom-out", keys: "−", what: "allontana" },
   { action: "zoom-fit", keys: "0", what: "tutto il montaggio" },
+  { action: "toggle-snap", keys: "N", what: "aggancio acceso / spento (tieni ⌘ mentre trascini: libero)" },
   { action: "save", keys: "⌘S", what: "salva adesso" },
   { action: "apply", keys: "⌘↵", what: "applica e rigenera" },
   { action: "help", keys: "?", what: "questa tabella" },
@@ -112,6 +114,7 @@ export function actionFor(event: KeyboardEvent): Action | null {
     case "+": case "=": return "zoom-in";
     case "-": case "_": return "zoom-out";
     case "0": return "zoom-fit";
+    case "n": case "N": return "toggle-snap";
     case "?": return "help";
     case "Escape": return "escape";
     default: return null;

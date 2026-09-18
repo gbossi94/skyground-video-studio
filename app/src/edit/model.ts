@@ -16,9 +16,14 @@ export interface KeptRange {
   /** Indices into the prepared transcript's words, both inclusive. */
   first: number;
   last: number;
-  /** Seconds in the source. Always inside the gap around the words. */
+  /** Seconds in the source. Inside the gap around the words, unless the edge
+   *  is free. */
   start: number;
   end: number;
+  /** The edge was put inside the outermost word on purpose (⌘-drag): the
+   *  transcript's timings are not exact and the ear decides. */
+  freeStart?: boolean;
+  freeEnd?: boolean;
 }
 
 export interface EditState {
@@ -30,18 +35,21 @@ export interface Rules {
   leadOut: number;
   minSegment: number;
   duration: number;
+  /** One frame: the least of a word a free edge leaves on its side. */
+  frame: number;
 }
 
 /** Word timings are milliseconds; a boundary may sit exactly on an edge. */
 export const EPSILON = 0.0015;
 
-export function rulesOf(plan: CutPlan, duration: number): Rules {
+export function rulesOf(plan: CutPlan, duration: number, fps = 30): Rules {
   const policy = plan.policy ?? ({} as Policy);
   return {
     leadIn: Number(policy.lead_in ?? 0.12),
     leadOut: Number(policy.lead_out ?? 0.28),
     minSegment: Number(policy.min_segment ?? 0.35),
     duration,
+    frame: 1 / fps,
   };
 }
 
@@ -58,7 +66,7 @@ export function fromPlan(plan: CutPlan, words: Word[]): EditState {
       first = inside[0];
       last = inside[inside.length - 1];
     }
-    kept.push({ first, last, start: segment.start, end: segment.end });
+    kept.push(withFlags(words, { first, last, start: segment.start, end: segment.end }));
   }
   return { kept };
 }
@@ -69,6 +77,8 @@ export function toRequest(state: EditState) {
     last: range.last,
     start: round3(range.start),
     end: round3(range.end),
+    ...(range.freeStart ? { freeStart: true } : {}),
+    ...(range.freeEnd ? { freeEnd: true } : {}),
   }));
 }
 
@@ -94,7 +104,8 @@ export function sameCut(a: EditState, b: EditState): boolean {
 
 /** Move one edge of a range to `seconds`. Words the edge passes over leave or
  *  join the range; the edge itself is then clamped into the gap around the
- *  range's outermost word, so it can never sit inside speech. */
+ *  range's outermost word, so it can never sit inside speech — unless `free`,
+ *  when it may stop inside that word too, a frame short of either end. */
 export function moveBoundary(
   state: EditState,
   words: Word[],
@@ -102,32 +113,37 @@ export function moveBoundary(
   side: "start" | "end",
   seconds: number,
   rules: Rules,
+  options: { free?: boolean } = {},
 ): EditState | null {
   const range = state.kept[index];
   if (!range) return null;
   const previous = state.kept[index - 1];
   const next = state.kept[index + 1];
+  const free = options.free === true;
   let updated: KeptRange;
 
   // Inside a word the edge stops at that word's outer side: a word leaves the
   // range only once the edge has been dragged all the way past it.
   const inside = wordAround(words, seconds);
-  if (inside !== null) seconds = side === "start" ? words[inside].t : words[inside].end;
+  if (inside !== null && !free) seconds = side === "start" ? words[inside].t : words[inside].end;
 
   if (side === "start") {
     const lowest = previous ? previous.last + 1 : 0;
-    let first = firstWordFrom(words, seconds);
+    // Free, a word the edge is inside still belongs to the range.
+    let first = free && inside !== null ? inside : firstWordFrom(words, seconds);
     first = Math.max(lowest, Math.min(first, range.last));
     const lo = Math.max(first > 0 ? words[first - 1].end : 0, previous ? previous.end : 0, 0);
-    const hi = words[first].t;
-    updated = { ...range, first, start: clamp(seconds, lo, hi) };
+    const hi = free ? Math.max(words[first].t, words[first].end - rules.frame) : words[first].t;
+    const start = clamp(seconds, lo, hi);
+    updated = { ...range, first, start, freeStart: start > words[first].t + EPSILON };
   } else {
     const highest = next ? next.first - 1 : words.length - 1;
-    let last = lastWordUpTo(words, seconds);
+    let last = free && inside !== null ? inside : lastWordUpTo(words, seconds);
     last = Math.min(highest, Math.max(last, range.first));
-    const lo = words[last].end;
+    const lo = free ? Math.min(words[last].end, words[last].t + rules.frame) : words[last].end;
     const hi = Math.min(last + 1 < words.length ? words[last + 1].t : rules.duration, next ? next.start : rules.duration, rules.duration);
-    updated = { ...range, last, end: clamp(seconds, lo, hi) };
+    const end = clamp(seconds, lo, hi);
+    updated = { ...range, last, end, freeEnd: end < words[last].end - EPSILON };
   }
   if (updated.end - updated.start < rules.minSegment - EPSILON) return null;
   return replaceAt(state, index, [updated]);
@@ -152,14 +168,17 @@ export function restoreGap(
   if (!before && !after) return null;
   if (!before) {
     // Everything from the start of the source up to the first range.
-    const merged: KeptRange = { ...after, first: 0, start: 0 };
+    const merged: KeptRange = { ...after, first: 0, start: 0, freeStart: false };
     return replaceAt(state, gap, [merged]);
   }
   if (!after) {
-    const merged: KeptRange = { ...before, last: words.length - 1, end: rules.duration };
+    const merged: KeptRange = { ...before, last: words.length - 1, end: rules.duration, freeEnd: false };
     return replaceAt(state, gap - 1, [merged]);
   }
-  const merged: KeptRange = { first: before.first, last: after.last, start: before.start, end: after.end };
+  const merged: KeptRange = {
+    first: before.first, last: after.last, start: before.start, end: after.end,
+    freeStart: before.freeStart, freeEnd: after.freeEnd,
+  };
   return { kept: [...state.kept.slice(0, gap - 1), merged, ...state.kept.slice(gap + 1)] };
 }
 
@@ -183,11 +202,21 @@ export function splitRange(
     leftEnd = middle;
     rightStart = middle;
   }
-  const left: KeptRange = { first: range.first, last: afterWord, start: range.start, end: leftEnd };
-  const right: KeptRange = { first: afterWord + 1, last: range.last, start: rightStart, end: range.end };
+  const left: KeptRange = { first: range.first, last: afterWord, start: range.start, end: leftEnd, freeStart: range.freeStart };
+  const right: KeptRange = { first: afterWord + 1, last: range.last, start: rightStart, end: range.end, freeEnd: range.freeEnd };
   if (left.end - left.start < rules.minSegment - EPSILON) return null;
   if (right.end - right.start < rules.minSegment - EPSILON) return null;
   return replaceAt(state, index, [left, right]);
+}
+
+/** A range read from a plan, with its edges marked free where they sit inside
+ *  the outermost words: only a person's ⌘-drag could have put them there. */
+function withFlags(words: Word[], range: KeptRange): KeptRange {
+  const head = words[range.first];
+  const tail = words[range.last];
+  const freeStart = head ? range.start > head.t + EPSILON && range.start < head.end - EPSILON : false;
+  const freeEnd = tail ? range.end > tail.t + EPSILON && range.end < tail.end - EPSILON : false;
+  return { ...range, ...(freeStart ? { freeStart } : {}), ...(freeEnd ? { freeEnd } : {}) };
 }
 
 /** Bring the edge of the range under `seconds` to `seconds`: the I and O keys. */

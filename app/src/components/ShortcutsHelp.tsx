@@ -21,8 +21,9 @@ export function ShortcutsHelp({ onClose }: { onClose: () => void }) {
         </table>
         <p className="hint">
           Sulla timeline: trascina il bordo di un pezzo per spostare il taglio (si aggancia alle
-          parole e ai silenzi), doppio clic su un pezzo per dividerlo, rotella per scorrere,
-          ⌘ + rotella per lo zoom.
+          parole, ai silenzi e al playhead); tieni ⌘ mentre trascini per muoverlo libero, al
+          fotogramma, anche dentro una parola. Doppio clic su un pezzo per dividerlo, rotella per
+          scorrere, ⌘ + rotella o pinch per lo zoom attorno alla freccia.
         </p>
       </div>
     </div>

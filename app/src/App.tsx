@@ -5,8 +5,10 @@ import { NewProject } from "./components/NewProject";
 import { Player, type Clock, type PlayerHandle } from "./components/Player";
 import { ENGINE, Questions, reviewQueue } from "./components/Questions";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
-import { Timeline, type Selection, type TimelineHandle } from "./components/Timeline";
-import { formatTime } from "./components/timeline/time";
+import { Icon } from "./components/icons";
+import { Timeline, type Selection, type TimelineHandle, type TrimInfo } from "./components/Timeline";
+import { formatTime, formatTimecode } from "./components/timeline/time";
+import { TrimView } from "./components/TrimView";
 import { Transport } from "./components/Transport";
 import { actionFor, type Action } from "./edit/keys";
 import {
@@ -37,6 +39,9 @@ export default function App() {
   const [tab, setTab] = useState<"clip" | "decisioni">("clip");
   const [snapping, setSnapping] = useState(true);
   const [zoom, setZoom] = useState({ px: 0, fit: 1 });
+  const [trimming, setTrimming] = useState<TrimInfo["side"] | null>(null);
+  const [trackHeight, setTrackHeight] = useState(() => remembered("skyground.trackHeight", 236));
+  const [exportOpen, setExportOpen] = useState(false);
 
   const [history, setHistory] = useState<History | null>(null);
   const [baseline, setBaseline] = useState<EditState | null>(null);
@@ -52,6 +57,7 @@ export default function App() {
   const film = useRef(0) as Clock;
   const sequenceRef = useRef<Sequence>(EMPTY);
   const previewRef = useRef<Sequence | null>(null);
+  const trimRef = useRef<TrimInfo | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -101,7 +107,7 @@ export default function App() {
   const words = transcript?.words ?? [];
   const sourceDuration = transcript?.duration ?? plan?.sourceDuration ?? 0;
   const fps = cut?.media?.fps ?? project?.canvas.fps ?? 30;
-  const rules = useMemo(() => (plan ? rulesOf(plan, sourceDuration) : null), [plan, sourceDuration]);
+  const rules = useMemo(() => (plan ? rulesOf(plan, sourceDuration, fps) : null), [plan, sourceDuration, fps]);
   const manual = !!(plan && plan.manual && "kept" in plan.manual);
 
   const source: CutSource = useMemo(() => ({
@@ -298,11 +304,12 @@ export default function App() {
       case "zoom-in": timeline.current?.zoomBy(1.5); return;
       case "zoom-out": timeline.current?.zoomBy(1 / 1.5); return;
       case "zoom-fit": timeline.current?.fit(); return;
+      case "toggle-snap": setSnapping((value) => !value); return;
       case "save": if (dirty) void save(); return;
       case "apply": void applyAndRebuild(); return;
       case "help": setHelp((value) => !value); return;
       case "escape":
-        setHelp(false); setSelection(null); setPlayingOption(null); player.current?.stop();
+        setHelp(false); setExportOpen(false); setSelection(null); setPlayingOption(null); player.current?.stop();
         return;
     }
   }, [history, rules, words, sequence, selection, dirty, change, seek, save, applyAndRebuild, splitHere, removeHere, restoreHere]);
@@ -389,12 +396,29 @@ export default function App() {
         </div>
 
         <div className="bar-right">
-          {working && <span className="chip live">{describe(working.kind)}…</span>}
-          {plan && <span className={`chip save ${saveState.replace("…", "")}`}>{saveState}</span>}
-          <div className="menu">
-            <button className="btn ghost" onClick={() => setCreating(true)}>Nuovo</button>
-            <a className="btn ghost" href={`/api/projects/${project.id}/export/fcpxml`} download title="Timeline per DaVinci Resolve, Premiere, Final Cut">FCPXML</a>
-            <a className="btn ghost" href={`/api/projects/${project.id}/export/srt`} download title="Sottotitoli">SRT</a>
+          {working ? (
+            <span className="status live"><i />{describe(working.kind)}…</span>
+          ) : plan && (
+            <span className={`status ${saveState.replace("…", "").replace(" ", "-")}`}><i />{saveState}</span>
+          )}
+          <button className="btn ghost" onClick={() => setCreating(true)}>Nuovo</button>
+          <div className="dropdown">
+            <button className="btn ghost" aria-expanded={exportOpen} onClick={() => setExportOpen((value) => !value)}>
+              Esporta <Icon name="chevron" size={14} />
+            </button>
+            {exportOpen && (
+              <>
+                <div className="dropdown-away" onClick={() => setExportOpen(false)} />
+                <div className="dropdown-menu" role="menu" onClick={() => setExportOpen(false)}>
+                  <a role="menuitem" href={`/api/projects/${project.id}/export/fcpxml`} download>
+                    <Icon name="download" /> <span><b>Timeline FCPXML</b><small>DaVinci Resolve, Premiere, Final Cut</small></span>
+                  </a>
+                  <a role="menuitem" href={`/api/projects/${project.id}/export/srt`} download>
+                    <Icon name="download" /> <span><b>Sottotitoli SRT</b><small>Le parole del montaggio, a tempo</small></span>
+                  </a>
+                </div>
+              </>
+            )}
           </div>
           <button
             className="btn primary"
@@ -447,6 +471,11 @@ export default function App() {
                 onPlayingChange={(value) => { setPlaying(value); if (!value) setPlayingOption(null); }}
                 onError={(message) => setNotice(message)}
               />
+              {src && (
+                <div className={trimming ? "trim-layer on" : "trim-layer"} aria-hidden={!trimming}>
+                  <TrimView src={src} fps={fps} trim={trimRef} side={trimming} />
+                </div>
+              )}
               <Transport
                 clock={clock}
                 duration={film}
@@ -509,27 +538,53 @@ export default function App() {
             </aside>
           </main>
 
+          <div
+            className="divider"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Altezza della timeline"
+            onPointerDown={(event) => {
+              const from = event.clientY;
+              const start = trackHeight;
+              const target = event.currentTarget;
+              target.setPointerCapture(event.pointerId);
+              const move = (next: PointerEvent) => {
+                const wanted = start - (next.clientY - from);
+                setTrackHeight(Math.round(Math.max(170, Math.min(window.innerHeight - 320, wanted))));
+              };
+              const up = () => {
+                target.removeEventListener("pointermove", move);
+                target.removeEventListener("pointerup", up);
+                setTrackHeight((value) => { remember("skyground.trackHeight", value); return value; });
+              };
+              target.addEventListener("pointermove", move);
+              target.addEventListener("pointerup", up);
+            }}
+            onDoubleClick={() => { setTrackHeight(236); remember("skyground.trackHeight", 236); }}
+          />
+
           <section className="track-panel">
             <div className="tools">
+              <Timecode clock={clock} fps={fps} />
               <div className="group">
-                <button className="tool" disabled={!history?.past.length} title={history?.past.length ? `Annulla: ${history.label} (⌘Z)` : "Niente da annullare"} onClick={() => dispatch("undo")} aria-label="Annulla">↶</button>
-                <button className="tool" disabled={!history?.future.length} title={history?.future.length ? `Ripeti: ${history.future[0].label} (⇧⌘Z)` : "Niente da ripetere"} onClick={() => dispatch("redo")} aria-label="Ripeti">↷</button>
+                <button className="tool icon" disabled={!history?.past.length} data-tip={history?.past.length ? `Annulla: ${history.label}  ⌘Z` : "Niente da annullare"} onClick={() => dispatch("undo")} aria-label="Annulla"><Icon name="undo" /></button>
+                <button className="tool icon" disabled={!history?.future.length} data-tip={history?.future.length ? `Ripeti: ${history.future[0].label}  ⇧⌘Z` : "Niente da ripetere"} onClick={() => dispatch("redo")} aria-label="Ripeti"><Icon name="redo" /></button>
               </div>
               <div className="group">
-                <button className="tool" title="Dividi al playhead (S)" onClick={splitHere} disabled={!clipAt(sequence, clock.current)}>Dividi</button>
-                <button className="tool" title="Togli la clip (⌫)" onClick={removeHere} disabled={selection?.kind !== "clip" && !clipAt(sequence, clock.current)}>Togli</button>
-                <button className="tool" title="Rimetti quello che è stato tolto (R)" onClick={restoreHere} disabled={selection?.kind !== "cut"}>Rimetti</button>
+                <button className="tool icon" data-tip="Dividi al playhead  S" onClick={splitHere} disabled={!clipAt(sequence, clock.current)} aria-label="Dividi"><Icon name="split" /></button>
+                <button className="tool icon" data-tip="Togli la clip  ⌫" onClick={removeHere} disabled={selection?.kind !== "clip" && !clipAt(sequence, clock.current)} aria-label="Togli"><Icon name="trash" /></button>
+                <button className="tool icon" data-tip="Rimetti la parte tolta  R" onClick={restoreHere} disabled={selection?.kind !== "cut"} aria-label="Rimetti"><Icon name="restore" /></button>
               </div>
-              <button className={snapping ? "tool on" : "tool"} title="Aggancio alle parole e ai silenzi" onClick={() => setSnapping((value) => !value)} aria-pressed={snapping}>
-                Aggancio
-              </button>
+              <div className="group">
+                <button className={snapping ? "tool icon on" : "tool icon"} data-tip={snapping ? "Aggancio acceso  N · tieni ⌘ per trascinare libero" : "Aggancio spento  N"} onClick={() => setSnapping((value) => !value)} aria-pressed={snapping} aria-label="Aggancio"><Icon name="magnet" /></button>
+              </div>
               <div className="spacer" />
               {dirty && (
                 <button className="btn tiny" onClick={() => void save()} disabled={saveState === "salvataggio…"} title="Salva le correzioni (⌘S)">Salva</button>
               )}
-              <button className="tool" title="Scorciatoie (?)" onClick={() => setHelp(true)} aria-label="Scorciatoie">?</button>
+              <button className="tool icon" data-tip="Scorciatoie  ?" onClick={() => setHelp(true)} aria-label="Scorciatoie"><Icon name="help" /></button>
               <div className="group zoom">
-                <button className="tool" onClick={() => dispatch("zoom-out")} aria-label="Allontana">−</button>
+                <button className="tool icon" data-tip="Allontana  −" onClick={() => dispatch("zoom-out")} aria-label="Allontana"><Icon name="minus" /></button>
                 <input
                   type="range" min={0} max={1} step={0.001}
                   value={zoomValue(zoom)}
@@ -539,8 +594,8 @@ export default function App() {
                     timeline.current?.zoomBy(wanted / (zoom.px || zoom.fit));
                   }}
                 />
-                <button className="tool" onClick={() => dispatch("zoom-in")} aria-label="Avvicina">+</button>
-                <button className="tool" onClick={() => dispatch("zoom-fit")} title="Tutto il montaggio (0)">Adatta</button>
+                <button className="tool icon" data-tip="Avvicina  +" onClick={() => dispatch("zoom-in")} aria-label="Avvicina"><Icon name="plus" /></button>
+                <button className="tool icon" data-tip="Tutto il montaggio  0" onClick={() => dispatch("zoom-fit")} aria-label="Adatta"><Icon name="fit" /></button>
               </div>
             </div>
 
@@ -558,6 +613,12 @@ export default function App() {
               playhead={clock}
               playing={playing}
               snapping={snapping}
+              height={trackHeight}
+              onTrim={(info) => {
+                trimRef.current = info;
+                const side = info?.side ?? null;
+                setTrimming((current) => (current === side ? current : side));
+              }}
               onScrub={(output) => { setPlayingOption(null); player.current?.seek(output); }}
               onSelect={(next) => { setSelection(next); if (next) setTab("clip"); }}
               onCommit={change}
@@ -599,6 +660,40 @@ function Meter({ film, source }: { film: Clock; source: number }) {
       <i>da {formatTime(source)}</i>
     </span>
   );
+}
+
+/** Where the film is, beside the tools, the way Premiere puts it over the
+ *  timeline. Written from an animation frame like the transport's. */
+function Timecode({ clock, fps }: { clock: Clock; fps: number }) {
+  const readout = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    let frame = 0;
+    let shown = -1;
+    const tick = () => {
+      frame = requestAnimationFrame(tick);
+      const now = Math.round(clock.current * fps);
+      if (now === shown || !readout.current) return;
+      shown = now;
+      readout.current.textContent = formatTimecode(clock.current, fps);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [clock, fps]);
+  return <span className="tc" ref={readout}>{formatTimecode(clock.current, fps)}</span>;
+}
+
+/** A per-viewer preference; storage can be missing or refuse, and then the
+ *  default is fine. */
+function remembered(key: string, fallback: number): number {
+  try {
+    const value = Number(window.localStorage.getItem(key));
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function remember(key: string, value: number) {
+  try { window.localStorage.setItem(key, String(value)); } catch { /* not kept: fine */ }
 }
 
 /** Which words the engine kept before anyone touched the cut: remembered by

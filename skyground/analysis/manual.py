@@ -47,6 +47,9 @@ MANUAL = "a mano"
 #: Timings are milliseconds; compare with the same tolerance as the invariants.
 EPSILON = invariants.EPSILON
 
+#: The least of a word a free edge leaves on its side: one frame at 30 fps.
+FRAME = 1 / 30
+
 
 @dataclass(frozen=True)
 class Kept:
@@ -55,12 +58,19 @@ class Kept:
     `first`/`last` are indices into the *prepared* words (`align.prepare`).
     `start`/`end` are seconds and optional: absent, the policy's lead-in and
     lead-out decide, exactly as the engine would.
+
+    `free_start`/`free_end` say a person put that edge inside the outermost
+    word on purpose (⌘-drag on the timeline): the transcript's word timings
+    are not exact, and the ear decides. Without the flag an edge is clamped
+    into the gap around its word, as always.
     """
 
     first: int
     last: int
     start: float | None = None
     end: float | None = None
+    free_start: bool = False
+    free_end: bool = False
 
     def as_dict(self) -> dict:
         payload: dict[str, Any] = {"first": self.first, "last": self.last}
@@ -68,6 +78,10 @@ class Kept:
             payload["start"] = round(self.start, 3)
         if self.end is not None:
             payload["end"] = round(self.end, 3)
+        if self.free_start:
+            payload["freeStart"] = True
+        if self.free_end:
+            payload["freeEnd"] = True
         return payload
 
     @staticmethod
@@ -85,6 +99,8 @@ class Kept:
             last,
             None if start is None else float(start),
             None if end is None else float(end),
+            bool(value.get("freeStart")),
+            bool(value.get("freeEnd")),
         )
 
 
@@ -141,6 +157,9 @@ def realise(
         "editedBy": edited_by or "",
         "basedOnTimelineEtag": timeline_etag
         or (previous.manual or {}).get("basedOnTimelineEtag", ""),
+        # Edges a person put inside a word: the invariants let these, and only
+        # these, through.
+        "freeEdges": _free_edges(segments, words),
     }
 
     problems = invariants.check(plan, analysis, min_segment=policy.min_segment)
@@ -163,7 +182,16 @@ def from_plan(plan: CutPlan, words: list) -> list[Kept]:
             if not inside:
                 continue
             first, last = inside[0], inside[-1]
-        kept.append(Kept(first, last, segment.start, segment.end))
+        kept.append(
+            Kept(
+                first,
+                last,
+                segment.start,
+                segment.end,
+                free_start=_inside(words[first], segment.start),
+                free_end=_inside(words[last], segment.end),
+            )
+        )
     return kept
 
 
@@ -254,10 +282,14 @@ def _segments(
         previous_end = segments[-1].end if segments else 0.0
         lo = max(words[item.first - 1].end if item.first > 0 else 0.0, previous_end, 0.0)
         hi = words[item.first].t
+        if item.free_start and item.start is not None:
+            hi = max(hi, words[item.first].end - FRAME)
         wanted = words[item.first].t - policy.lead_in if item.start is None else item.start
         start = min(max(wanted, lo), hi)
 
         lo = words[item.last].end
+        if item.free_end and item.end is not None:
+            lo = min(lo, words[item.last].t + FRAME)
         hi = min(words[item.last + 1].t if item.last + 1 < len(words) else duration, duration)
         wanted = words[item.last].end + policy.lead_out if item.end is None else item.end
         end = min(max(wanted, lo), hi)
@@ -272,6 +304,21 @@ def _segments(
             )
         )
     return _merge_touching(segments)
+
+
+def _inside(word, position: float) -> bool:
+    return word.t + EPSILON < position < word.end - EPSILON
+
+
+def _free_edges(segments: list[Segment], words) -> list[float]:
+    """Every boundary that sits inside a word. Only a free edge can get there:
+    everything else is clamped into a gap by `_segments`."""
+    edges = []
+    for segment in segments:
+        for position in (segment.start, segment.end):
+            if any(_inside(word, position) for word in words):
+                edges.append(round(position, 3))
+    return edges
 
 
 def _check_lengths(segments: list[Segment], min_segment: float) -> None:
