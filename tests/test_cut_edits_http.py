@@ -259,6 +259,37 @@ def test_the_rebuild_job_runs_the_downstream_half_and_nothing_else(
     assert report == {"timelineRevision": 7}
 
 
+def test_the_rebuild_takes_the_raw_take_from_storage_when_it_came_in_by_upload(
+    settings, session_factory, workspace, registered_project, tmp_path, monkeypatch
+):
+    from skyground.services import assets as asset_service
+    from skyground.services import jobs as job_service
+    from skyground.worker.runner import Worker
+
+    seen: list[bool] = []
+    monkeypatch.setattr(
+        type(workspace), "build_source",
+        lambda self, slug: seen.append((self.project_dir(slug) / "assets" / "raw.mov").is_file()),
+    )
+    monkeypatch.setattr(type(workspace), "sync", lambda self, slug: {})
+    monkeypatch.setattr(type(workspace), "validate", lambda self, slug: [])
+
+    worker = Worker(settings=settings, session_factory=session_factory, workspace=workspace, name="test:1")
+    raw = workspace.project_dir(PROJECT_ID) / "assets" / "raw.mov"
+    if raw.exists():
+        raw.unlink()
+    upload = tmp_path / "upload.mov"
+    upload.write_bytes(b"camera")
+    with session_factory() as db:
+        project = db.get(Project, registered_project["project"].id)
+        worker.storage.put_file(asset_service.object_key(project, "assets/raw.mov"), upload, "video/quicktime")
+        job = job_service.enqueue(db, project, kind="rebuild", payload={"render": False}, max_attempts=1)
+        db.commit()
+        worker.handle_rebuild(db, job, project)
+    assert seen == [True]
+    assert raw.read_bytes() == b"camera"
+
+
 def test_the_full_job_refuses_to_overwrite_a_manual_edit(
     settings, session_factory, workspace, registered_project, planned
 ):

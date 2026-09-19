@@ -239,6 +239,25 @@ class Worker:
         target = pathlib.Path(tempfile.gettempdir()) / "skyground" / project.slug / relative
         return self.storage.download(key, target)
 
+    def _raw_in_workspace(self, session: Session, project: Project, job: RenderJob) -> None:
+        """Put the raw take where `build_source` reads it. An upload lands in
+        storage; the proxy job reads it from there, but the rebuild read only
+        the workspace and failed with «raw non disponibile» on every film that
+        came in through the browser."""
+        import shutil
+
+        relative = job.payload.get("source") or self._timeline_source(session, project)
+        target = self.workspace.project_dir(project.slug) / relative
+        if target.is_file():
+            return
+        try:
+            found = self._source_for(session, project, job)
+        except NotSupported:
+            return  # nowhere at all: `build_source` says so in its own words
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if found.resolve() != target.resolve():
+            shutil.move(str(found), target)
+
     def _timeline_source(self, session: Session, project: Project) -> str:
         timeline = DocumentService(session, self.workspace).read(project, "timeline.json")
         return (timeline.content or {}).get("source") or "assets/raw.mov"
@@ -287,6 +306,7 @@ class Worker:
         report["applied"] = {"clips": applied["clips"], "duration": applied["duration"],
                              "dropped": applied.get("dropped", [])}
         session.commit()  # the documents are on disk and in the database before the long steps
+        self._raw_in_workspace(session, project, job)
         self.workspace.build_source(project.slug)
         self.workspace.sync(project.slug)
         problems = self.workspace.validate(project.slug)
@@ -306,6 +326,7 @@ class Worker:
         """
         self._require_workspace(project)
         report: dict = {"timelineRevision": job.payload.get("timelineRevision")}
+        self._raw_in_workspace(session, project, job)
         self.workspace.build_source(project.slug)
         self.workspace.sync(project.slug)
         problems = self.workspace.validate(project.slug)
