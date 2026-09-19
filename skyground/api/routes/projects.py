@@ -53,6 +53,96 @@ def list_projects(
     ]
 
 
+@router.post("/api/projects")
+def create_empty_project(
+    payload: dict = Body(...),
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+    workspace: Workspace = Depends(get_workspace),
+) -> dict:
+    """A project with a name and nothing else: it opens straight away, and the
+    footage goes in from inside it (`PUT /api/projects/{slug}/source`).
+
+    Before, naming the film and choosing the file were one form, and after it
+    the screen said only that the studio was working. Now the project exists
+    first, and every step after it happens where the person can see it.
+    """
+    import datetime
+    import re
+    import unicodedata
+
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise ValidationError("dai un nome al video")
+    plain = unicodedata.normalize("NFD", name.lower()).encode("ascii", "ignore").decode()
+    base = re.sub(r"[^a-z0-9]+", "-", plain).strip("-")[:40] or "video"
+    stamp = datetime.date.today().strftime("%y%m%d")
+    slug, suffix = f"{base}-{stamp}", 1
+    while workspace.exists(slug) or project_service.find_project(session, slug) is not None:
+        suffix += 1
+        slug = f"{base}-{stamp}-{suffix}"
+    project = project_service.create_project(
+        session, slug=slug, name=name, owner=user, status="draft",
+        settings={"language": payload.get("language") or "it"},
+    )
+    service = document_service.DocumentService(session, workspace)
+    return serializers.project_payload(project, workspace, service)
+
+
+@router.put("/api/projects/{slug}/source")
+async def upload_source(
+    slug: str,
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+    workspace: Workspace = Depends(get_workspace),
+) -> dict:
+    """The footage for a project that was created empty. Laid out exactly as
+    `PUT /api/projects/{slug}` lays out a new one, then heard and cut: the
+    analysis job transcribes, proposes the cut and queues the preview, and
+    stops there — the person looks at the cut before anything is rendered."""
+    from skyground.db.models import MODE_WORKSPACE
+    from skyground.services import jobs as job_service
+    from skyground.services import permissions
+
+    project = project_service.get_project(session, slug)
+    permissions.require(session, project, user, "job:create")
+    if workspace.exists(slug):
+        raise ValidationError("questo progetto ha già il suo girato")
+    created = await _lay_out(request, workspace, slug, project.name, "beauty-centers-growth-01")
+    project.storage_mode = MODE_WORKSPACE
+    project_service.register_workspace_project(session, workspace, slug, owner=user)
+    audit.record(session, "project.source", actor=user, project=project, data=created)
+    job = job_service.enqueue(session, project, kind="analyze", actor=user)
+    service = document_service.DocumentService(session, workspace)
+    return {
+        "project": serializers.project_payload(project, workspace, service),
+        "job": serializers.job_payload(job),
+    }
+
+
+async def _lay_out(request: Request, workspace: Workspace, slug: str, name: str, template: str | None) -> dict:
+    """Stream the body to a spool file and build the project around it."""
+    import tempfile
+
+    from skyground.api.uploads import receive_object
+    from skyground.storage.local import LocalObjectStorage
+
+    spool_root = pathlib.Path(tempfile.gettempdir()) / "skyground-intake"
+    spool = LocalObjectStorage(spool_root)
+    suffix = pathlib.Path(request.headers.get("X-Skyground-Filename") or "raw.mov").suffix or ".mov"
+    key = f"{slug}/raw{suffix.lower()}"
+    stored = await receive_object(request, spool, key, content_type=request.headers.get("Content-Type", ""))
+    try:
+        created = workspace.create_project(
+            slug, name, spool_root / key, template_project=template,
+            language=(request.headers.get("X-Skyground-Language") or "it"),
+        )
+    finally:
+        (spool_root / key).unlink(missing_ok=True)
+    return {"bytes": stored.size, "sha256": stored.sha256, **created}
+
+
 @router.put("/api/projects/{slug}")
 async def create_project(
     slug: str,
@@ -69,32 +159,14 @@ async def create_project(
     it and registered, and the caller becomes its owner. Follow with
     `POST /api/projects/{slug}/cut/full` and the film comes back edited.
     """
-    import pathlib
-    import tempfile
-
-    from skyground.api.uploads import receive_object
-    from skyground.storage.local import LocalObjectStorage
-
     if workspace.exists(slug):
         raise ValidationError(f"il progetto esiste già: {slug}")
-    spool_root = pathlib.Path(tempfile.gettempdir()) / "skyground-intake"
-    spool = LocalObjectStorage(spool_root)
-    suffix = pathlib.Path(request.headers.get("X-Skyground-Filename") or "raw.mov").suffix or ".mov"
-    key = f"{slug}/raw{suffix.lower()}"
-    stored = await receive_object(request, spool, key, content_type=request.headers.get("Content-Type", ""))
-    try:
-        created = workspace.create_project(
-            slug, name or slug, spool_root / key, template_project=template,
-            language=(request.headers.get("X-Skyground-Language") or "it"),
-        )
-    finally:
-        (spool_root / key).unlink(missing_ok=True)
+    created = await _lay_out(request, workspace, slug, name or slug, template)
     project = project_service.register_workspace_project(session, workspace, slug, owner=user)
-    audit.record(session, "project.create", actor=user, project=project,
-                 data={"bytes": stored.size, "sha256": stored.sha256, **created})
+    audit.record(session, "project.create", actor=user, project=project, data=created)
     service = document_service.DocumentService(session, workspace)
     payload = serializers.project_payload(project, workspace, service)
-    payload["source"] = created
+    payload["source"] = {key: value for key, value in created.items() if key not in ("bytes", "sha256")}
     return payload
 
 

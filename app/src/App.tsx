@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, type ConflictPayload, type JobSummary, type ProjectSummary } from "./api";
 import { Inspector } from "./components/Inspector";
+import { Intake } from "./components/Intake";
 import { NewProject } from "./components/NewProject";
 import { Player, type Clock, type PlayerHandle } from "./components/Player";
 import { ENGINE, Questions, reviewQueue } from "./components/Questions";
@@ -27,6 +28,7 @@ export default function App() {
   const [creating, setCreating] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [working, setWorking] = useState<JobSummary | null>(null);
+  const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [cut, setCut] = useState<CutState | null>(null);
   const [transcript, setTranscript] = useState<Transcript | null>(null);
   const [selectedQuestion, setSelectedQuestion] = useState<Question | null>(null);
@@ -132,6 +134,7 @@ export default function App() {
   // The worker does the slow parts; the documents only change when it is done.
   useEffect(() => {
     if (!project) return;
+    setJobs([]);
     let previous: JobSummary | null = null;
     let stopped = false;
     let timer = 0;
@@ -139,7 +142,7 @@ export default function App() {
       try {
         const jobs = await api.jobs(project.id);
         const live = jobs.find((job) => job.status === "queued" || job.status === "running") ?? null;
-        if (!stopped) setWorking(live);
+        if (!stopped) { setWorking(live); setJobs(jobs); }
         if (previous && !live) {
           const ended = jobs.find((job) => job.id === previous?.id);
           const render = (ended?.result as { render?: { skipped?: boolean; reason?: string } } | null)?.render;
@@ -451,8 +454,18 @@ export default function App() {
       {sheet}
       {help && <ShortcutsHelp onClose={() => setHelp(false)} />}
 
-      {working && !plan ? (
-        <Empty title={`Lo studio sta lavorando: ${describe(working.kind)}`} detail={working.status === "queued" ? "In coda: parte appena il worker è libero." : "In corso. La pagina si aggiorna da sola."} />
+      {project.hasSource === false || (!plan && (working || jobs.some((job) => job.kind === "analyze" || job.kind === "full"))) ? (
+        <Intake
+          project={project}
+          jobs={working && !jobs.some((job) => job.id === working.id) ? [working, ...jobs] : jobs}
+          onUploaded={(updated, job) => {
+            setProjects((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+            setWorking(job);
+            setJobs([job]);
+            setProject(updated);
+          }}
+          onRetry={() => run("analyze", async () => { const job = await api.analyze(project.id); setWorking(job as JobSummary); })}
+        />
       ) : !plan || !state || !rules ? (
         <Missing
           state={cut.state}

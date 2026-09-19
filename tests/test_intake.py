@@ -200,6 +200,51 @@ def test_a_project_is_created_from_the_video_in_one_request(client, sign_in, mak
     assert queued.json()["kind"] == "full"
 
 
+def test_a_project_is_created_by_name_and_opens_empty(client, sign_in, make_user):
+    make_user("editor@skyground.online")
+    sign_in("editor@skyground.online")
+
+    made = client.post("/api/projects", json={"name": "Centri estetici, prova 1"})
+    assert made.status_code == 200, made.text
+    project = made.json()
+    assert project["name"] == "Centri estetici, prova 1"
+    assert project["hasSource"] is False
+    assert re.fullmatch(r"centri-estetici-prova-1-\d{6}", project["id"])
+
+    listed = client.get("/api/projects").json()
+    assert project["id"] in [item["id"] for item in listed]
+    state = client.get(f"/api/projects/{project['id']}/cut").json()
+    assert state["state"] == "senza-analisi"
+
+    again = client.post("/api/projects", json={"name": "Centri estetici, prova 1"}).json()
+    assert again["id"] == project["id"] + "-2"
+    assert client.post("/api/projects", json={"name": "  "}).status_code == 422
+
+
+@needs_ffmpeg
+def test_the_footage_goes_into_the_project_and_the_cut_is_queued(client, sign_in, make_user, workspace, tmp_path):
+    make_user("editor@skyground.online")
+    sign_in("editor@skyground.online")
+    slug = client.post("/api/projects", json={"name": "Dentro il progetto"}).json()["id"]
+    video = make_video(tmp_path / "girato")
+
+    response = client.put(
+        f"/api/projects/{slug}/source",
+        content=video.read_bytes(),
+        headers={"Content-Type": "video/mp4", "X-Skyground-Filename": video.name},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["project"]["hasSource"] is True
+    assert payload["project"]["name"] == "Dentro il progetto"
+    assert payload["job"]["kind"] == "analyze"
+    assert (workspace.project_dir(slug) / "assets" / "raw.mp4").stat().st_size == video.stat().st_size
+    second = client.put(f"/api/projects/{slug}/source", content=b"x",
+                        headers={"Content-Type": "video/mp4", "X-Skyground-Filename": "x.mp4"})
+    assert second.status_code == 422
+
+
 # ------------------------------------------------------------ render veloce
 
 

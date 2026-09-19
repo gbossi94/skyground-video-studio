@@ -29,6 +29,8 @@ export interface ProjectSummary {
   canvas: { duration: number; width: number; height: number; fps: number };
   files: Record<string, string>;
   previewAvailable: boolean;
+  /** False for a project created by name that is still waiting for its footage. */
+  hasSource?: boolean;
 }
 
 export interface JobSummary {
@@ -38,6 +40,9 @@ export interface JobSummary {
   attempts: number;
   error: string | null;
   result: Record<string, unknown> | null;
+  createdAt?: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
 }
 
 /** A raw video becomes a project in one request: the file is the body. */
@@ -59,7 +64,36 @@ async function createProject(slug: string, name: string, file: File, template?: 
   return payload as ProjectSummary;
 }
 
+/** The footage into a project that exists already, with progress: `fetch`
+ *  cannot report how much of a request body has gone, XHR can. */
+function uploadSource(
+  slug: string,
+  file: File,
+  onProgress: (sent: number, total: number) => void,
+): { done: Promise<{ project: ProjectSummary; job: JobSummary }>; cancel: () => void } {
+  const request = new XMLHttpRequest();
+  const done = new Promise<{ project: ProjectSummary; job: JobSummary }>((resolve, reject) => {
+    request.open("PUT", `/api/projects/${encodeURIComponent(slug)}/source`);
+    request.setRequestHeader("Content-Type", file.type || "video/mp4");
+    request.setRequestHeader("X-Skyground-Filename", file.name);
+    request.upload.onprogress = (event) => onProgress(event.loaded, event.total || file.size);
+    request.onload = () => {
+      let payload: unknown = {};
+      try { payload = JSON.parse(request.responseText || "{}"); } catch { /* not JSON */ }
+      if (request.status >= 200 && request.status < 300) resolve(payload as { project: ProjectSummary; job: JobSummary });
+      else reject(new ApiError((payload as { error?: string }).error ?? `caricamento non riuscito (${request.status})`, request.status, payload));
+    };
+    request.onerror = () => reject(new ApiError("la connessione si è interrotta durante il caricamento", 0));
+    request.onabort = () => reject(new ApiError("caricamento annullato", 0));
+    request.send(file);
+  });
+  return { done, cancel: () => request.abort() };
+}
+
 export const api = {
+  createEmpty: (name: string) =>
+    call<ProjectSummary>("/api/projects", { method: "POST", body: JSON.stringify({ name }) }),
+  uploadSource,
   me: () => call<{ user: { email: string }; authMode: string }>("/api/auth/me"),
   createProject,
   fullCut: (slug: string) =>

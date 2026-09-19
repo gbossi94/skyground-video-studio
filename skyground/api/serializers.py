@@ -27,6 +27,10 @@ def project_payload(project: Project, workspace: Workspace, documents=None) -> d
         preview = manifest.get("files", {}).get("preview", "preview.mp4")
         manifest["path"] = str(base.relative_to(workspace.root))
         manifest["previewAvailable"] = (base / preview).exists()
+    elif project.storage_mode != MODE_WORKSPACE and not workspace.exists(project.slug) and not project.canvas:
+        # Created by name, waiting for its footage: nothing on disk to read yet.
+        manifest = {"id": project.slug, "name": project.name, "canvas": {}, "path": None,
+                    "previewAvailable": False}
     else:
         manifest = dict(documents.read(project, "project.json").content) if documents else {}
         manifest.setdefault("id", project.slug)
@@ -35,6 +39,7 @@ def project_payload(project: Project, workspace: Workspace, documents=None) -> d
         manifest["path"] = None
         manifest["previewAvailable"] = False
     manifest["storageMode"] = project.storage_mode
+    manifest["hasSource"] = workspace.exists(project.slug)
     manifest["status"] = project.status or manifest.get("status", "draft")
     return manifest
 
