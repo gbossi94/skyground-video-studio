@@ -293,7 +293,7 @@ class Worker:
         if problems:
             raise StudioError("progetto non valido dopo il montaggio:\n- " + "\n- ".join(problems))
         if job.payload.get("render", True):
-            report["render"] = self.handle_render(session, job, project)
+            report["render"] = self._render_if_possible(session, job, project)
         return report
 
     def handle_rebuild(self, session: Session, job: RenderJob, project: Project) -> dict:
@@ -312,8 +312,21 @@ class Worker:
         if problems:
             raise StudioError("progetto non valido dopo la correzione:\n- " + "\n- ".join(problems))
         if job.payload.get("render", True):
-            report["render"] = self.handle_render(session, job, project)
+            report["render"] = self._render_if_possible(session, job, project)
         return report
+
+    def _render_if_possible(self, session: Session, job: RenderJob, project: Project) -> dict:
+        """The render, unless the media it plays are not on this machine.
+
+        The hand-made film's AI angles, effects and music live on the Mac that
+        made them, never on the server: rendering here would fail after the
+        documents were already rebuilt, and a correction that was applied
+        would read as a failed job. The job succeeds, and says where to render.
+        """
+        missing = self.workspace.missing_media(project.slug)
+        if missing:
+            return {"skipped": True, "missing": missing, "reason": _render_elsewhere(project.slug, missing)}
+        return self.handle_render(session, job, project)
 
     def handle_validate(self, session: Session, job: RenderJob, project: Project) -> dict:
         problems = DocumentService(session, self.workspace).problems(project)
@@ -333,6 +346,9 @@ class Worker:
         problems = self.workspace.validate(project.slug)
         if problems:
             raise StudioError("progetto non valido:\n- " + "\n- ".join(problems))
+        missing = self.workspace.missing_media(project.slug)
+        if missing:
+            raise StudioError(_render_elsewhere(project.slug, missing))
         output = self.workspace.render(project.slug)
         key = asset_service.object_key(project, f"renders/{output.name}")
         stored = self.storage.put_file(key, output, "video/mp4")
@@ -494,3 +510,10 @@ def _editor_model():
 
     settings = get_settings()
     return build_model(settings) if settings.cut_engine == "editor" else None
+
+
+def _render_elsewhere(slug: str, missing: list[str]) -> str:
+    return (
+        f"il render non parte qui: mancano {', '.join(missing)}. "
+        f"Si rende sul Mac che ha i media: python3 studio.py render-remote {slug}"
+    )

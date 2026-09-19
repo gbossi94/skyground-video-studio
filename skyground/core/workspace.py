@@ -960,6 +960,22 @@ class Workspace:
             candidate = directory / f"{project_id}-{version}-{suffix}.mp4"
         return candidate
 
+    def missing_media(self, project_id: str) -> list[str]:
+        """Every picture and sound the composition plays that is not on this
+        disk. The renderer does not stop at the first: it fails after lint,
+        compile and probe, with six warnings in a log nobody reads. Asked
+        before, it is one sentence naming the files."""
+        base = self.project_dir(project_id)
+        composition = base / read_json(base / "project.json")["files"]["composition"]
+        html = composition.read_text(encoding="utf-8")
+        missing = []
+        for src in re.findall(r'<(?:video|audio)\b[^>]*?\ssrc="([^"]+)"', html):
+            if "://" in src or src.startswith("data:"):
+                continue
+            if not (composition.parent / src).exists() and src not in missing:
+                missing.append(src)
+        return missing
+
     def is_plain(self, project_id: str) -> bool:
         """Whether the film is picture, captions and a mark — and nothing that
         needs a browser to draw.

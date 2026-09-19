@@ -142,7 +142,9 @@ export default function App() {
         if (!stopped) setWorking(live);
         if (previous && !live) {
           const ended = jobs.find((job) => job.id === previous?.id);
+          const render = (ended?.result as { render?: { skipped?: boolean; reason?: string } } | null)?.render;
           if (ended?.status === "failed") setNotice(`${describe(ended.kind)}: fallito — ${ended.error ?? ""}`);
+          else if (ended?.status === "succeeded" && render?.skipped) setNotice(`${describe(ended.kind)}: documenti aggiornati. ${render.reason ?? ""}`);
           else if (ended?.status === "succeeded") setNotice(`${describe(ended.kind)}: fatto`);
           await reload(project.id);
         }

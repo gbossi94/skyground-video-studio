@@ -67,6 +67,16 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("--capcut-sample", default=None,
                         help="cartella di una bozza salvata da CapCut, da cui prendere la forma (default <workspace>/capcut/sample)")
 
+    remote = subcommands.add_parser(
+        "render-remote",
+        help="rende qui un progetto della produzione e ricarica il film come nuova versione",
+    )
+    remote.add_argument("project")
+    remote.add_argument("--server", default=None,
+                        help="lo studio online (default SKYGROUND_SERVER o skyground-studio.onrender.com)")
+    remote.add_argument("--email", default=None, help="il tuo account (default SKYGROUND_EMAIL)")
+    remote.add_argument("--no-upload", action="store_true", help="rendi soltanto, non caricare")
+
     serve = subcommands.add_parser("serve", help="avvia il pannello")
     serve.add_argument("--host", default=None)
     serve.add_argument("--port", type=int, default=None)
@@ -282,6 +292,20 @@ def run_editorial(args, workspace: Workspace) -> int | None:
         return 0
     if args.command == "render":
         print(workspace.render(args.project))
+        return 0
+    if args.command == "render-remote":
+        from skyground import remote
+
+        email = args.email or os.environ.get("SKYGROUND_EMAIL") or input("email: ").strip()
+        password = getpass.getpass(f"password di {email}: ")
+        remote.render_remote(
+            workspace,
+            args.project,
+            server=args.server or os.environ.get("SKYGROUND_SERVER") or remote.DEFAULT_SERVER,
+            email=email,
+            password=password,
+            upload=not args.no_upload,
+        )
         return 0
     return None
 
