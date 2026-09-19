@@ -242,9 +242,6 @@ def run_editorial(args, workspace: Workspace) -> int | None:
     if args.command == "evaluate":
         return run_evaluate(args, workspace)
     if args.command == "export":
-        import os
-        import pathlib
-
         kinds = ("fcpxml", "srt") if args.format == "all" else (args.format,)
         for kind in kinds:
             print(workspace.export(
