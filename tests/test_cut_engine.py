@@ -132,11 +132,16 @@ def test_a_long_pause_is_trimmed_not_kept_whole():
 
 
 def test_a_mid_sentence_pause_is_asked_about_not_assumed():
-    """No full stop before the silence: it may be a beat the speaker wanted."""
+    """No full stop before the silence: it may be a beat the speaker wanted.
+
+    Only when somebody asked to be asked: the default policy calls no pause
+    deliberate by its length any more, because the hand edit it is measured
+    against keeps none longer than a quarter of a second.
+    """
     first, end = speak(1.0, "e quindi ti invito a fare")
     second, _ = speak(end + 1.6, "una scommessa seria questa volta.")
     analysis = analysis_of(first, second)
-    plan = plan_cut(analysis, CutPolicy(ask_when_unsure=True))
+    plan = plan_cut(analysis, CutPolicy(ask_when_unsure=True, rhetorical_pause=1.20))
 
     asked = [item for item in plan.questions if item.kind == ASK_PAUSE_INTENT]
     assert len(asked) == 1
@@ -148,10 +153,47 @@ def test_keeping_a_rhetorical_pause_leaves_it_in_the_edit():
     second, _ = speak(end + 1.6, "una scommessa seria questa volta.")
     analysis = analysis_of(first, second)
 
-    asked = next(q for q in plan_cut(analysis).questions if q.kind == ASK_PAUSE_INTENT)
-    kept = plan_cut(analysis, decisions={asked.id: "keep"})
-    trimmed = plan_cut(analysis, decisions={asked.id: "cut"})
+    policy = CutPolicy(rhetorical_pause=1.20)
+    asked = next(q for q in plan_cut(analysis, policy).questions if q.kind == ASK_PAUSE_INTENT)
+    kept = plan_cut(analysis, policy, decisions={asked.id: "keep"})
+    trimmed = plan_cut(analysis, policy, decisions={asked.id: "cut"})
     assert kept.output_duration > trimmed.output_duration
+
+
+def test_the_edges_follow_the_measured_silence_not_the_transcript():
+    """What makes two pieces sound joined is how much silence is left between
+    them. The transcript's word edges are approximate — trimming to them once
+    clipped the tails of words — so where the waveform reported its own
+    silence, that is what the cut is placed against.
+
+    Measured on the hand edit of the reference footage: its joins sit at
+    0.19s of silence, and no pause in it runs past 0.25s.
+    """
+    from skyground.analysis.models import Silence
+
+    first, end = speak(1.0, "prima frase detta bene.")
+    second, _ = speak(end + 1.4, "seconda frase, altrettanto.")
+    analysis = analysis_of(first, second)
+    last_word = first[-1]
+    # The voice really stops a tenth after the transcript says it does, and
+    # starts again a tenth before the next word.
+    quiet = Silence(start=last_word.end + 0.10, end=second[0].t - 0.10)
+    measured = Analysis(
+        source=analysis.source, duration=analysis.duration,
+        words=analysis.words, silences=[quiet],
+    )
+
+    plan = plan_cut(measured)
+    join = next(seg for seg in plan.segments if seg.last_word == len(first) - 1)
+    after = next(seg for seg in plan.segments if seg.first_word == len(first))
+
+    assert join.end == pytest.approx(quiet.start + CutPolicy().tail_air, abs=0.01)
+    assert join.end > last_word.end, "una coda tagliata è il difetto da non rifare"
+    assert after.start == pytest.approx(quiet.end - CutPolicy().head_air, abs=0.01)
+    # The pause itself is cut out; what is heard at the join is the air left
+    # on either side of it, which is the number the ear judges.
+    heard = (join.end - quiet.start) + (quiet.end - after.start)
+    assert heard == pytest.approx(0.20, abs=0.02)
 
 
 # ------------------------------------------------------------------- the takes

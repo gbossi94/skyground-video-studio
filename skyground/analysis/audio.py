@@ -21,7 +21,10 @@ SILENCE_END = re.compile(r"silence_end:\s*(-?[\d.]+)")
 
 #: Below this level, for at least this long, counts as a pause.
 DEFAULT_NOISE_DB = -32.0
-DEFAULT_MIN_SILENCE = 0.25
+#: Short enough to see the gap a speaker leaves between two sentences: the
+#: edges of a cut are placed on these, so a silence the detector never
+#: reported is one the engine has to guess at from the transcript instead.
+DEFAULT_MIN_SILENCE = 0.12
 
 
 def probe_duration(path: pathlib.Path | str) -> float:

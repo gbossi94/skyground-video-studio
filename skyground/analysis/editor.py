@@ -33,17 +33,24 @@ from skyground.analysis.cut import ENGINE, CutPolicy, _build_segments, _classify
 from skyground.analysis.models import Analysis, CutPlan, Option, Question, Word
 from skyground.errors import ConfigurationError
 
-#: The air the editor leaves. A join is four tenths of a second — a clause
-#: pause, the length a speaker takes between two sentences — and a pause the
-#: speaker made is left alone up to nearly that, so the rhythm stays theirs.
-#: The first version squeezed every join to 0.20s and split every pause over
-#: 0.40: three natural pauses in a row came out as a burst of machine-gun
-#: cuts, and a lead-out of 0.14 clipped the tails of words. Both were heard.
+#: The air the editor leaves, measured against the hand edit of the reference
+#: footage: there no pause runs longer than 0.25s and the joins sit at 0.19s,
+#: which is what makes the pieces sound connected rather than assembled.
+#:
+#: An earlier attempt at those numbers worked on the transcript's word edges,
+#: squeezing every join to 0.20s: three natural pauses in a row became a burst
+#: of machine-gun cuts and a lead-out of 0.14 clipped the tails of words, both
+#: audible. What changed is where the numbers are measured from — `head_air`
+#: and `tail_air` are counted from the waveform's own silence — so `lead_in`
+#: and `lead_out` stay generous for the stretches where no silence was
+#: measured, and the cut still lands tight where one was.
 EDITOR_POLICY = CutPolicy(
-    max_pause=0.45,
+    max_pause=0.30,
     keep_pause=0.18,
     lead_in=0.10,
-    lead_out=0.30,
+    lead_out=0.28,
+    head_air=0.08,
+    tail_air=0.12,
     min_segment=0.35,
     rhetorical_pause=99.0,  # no pause is called deliberate by a number
     ask_when_unsure=False,

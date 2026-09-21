@@ -53,12 +53,21 @@ class CutPolicy:
     #: A gap this long starts a new utterance.
     utterance_gap: float = 0.55
     #: A pause longer than this is trimmed…
-    max_pause: float = 0.60
+    max_pause: float = 0.30
     #: …down to this much, so the edit still breathes.
-    keep_pause: float = 0.22
-    #: Air kept before the first word and after the last of a segment.
+    keep_pause: float = 0.18
+    #: Air kept before the first word and after the last of a segment, when
+    #: the transcript's word edges are all there is to go on.
     lead_in: float = 0.12
     lead_out: float = 0.28
+    #: Air kept when the *measured* silence says where the sound really stops
+    #: and starts again. A word's timestamp is approximate — trimming to it
+    #: clipped the tails of words the last time the joins were tightened —
+    #: while the waveform is not, so the cut can sit this close to it.
+    #: Measured against the reference hand edit: no pause in it is longer
+    #: than 0.25s, and its joins sit at 0.19s.
+    head_air: float = 0.08
+    tail_air: float = 0.12
     #: Shorter than this is a glitch, not a cut.
     min_segment: float = 0.35
     #: Two utterances this similar are certainly the same line…
@@ -67,8 +76,10 @@ class CutPolicy:
     suspect_similarity: float = 0.30
     #: Below this score margin the engine is unsure which take is better.
     decide_margin: float = 0.22
-    #: A mid-sentence pause longer than this may be deliberate.
-    rhetorical_pause: float = 1.20
+    #: A mid-sentence pause longer than this may be deliberate. The hand edit
+    #: this engine is measured against has none: every pause in it is under a
+    #: quarter of a second, so a pause is only ever kept when somebody says so.
+    rhetorical_pause: float = 99.0
     #: Whether an uncertain call stops the edit until a person makes it.
     #:
     #: False, by default, and that default is a change of mind. The first design
@@ -489,7 +500,9 @@ def _build_segments(
         pieces.append((piece_start, last))
 
         for piece_first, piece_last in pieces:
-            segment = _segment_for(words, piece_first, piece_last, analysis.duration, policy)
+            segment = _segment_for(
+                words, piece_first, piece_last, analysis.duration, policy, analysis.silences
+            )
             if segment.duration < policy.min_segment:
                 # Too short to stand alone: glue it to the previous segment when
                 # they are adjacent in the source, otherwise leave it out and let
@@ -514,12 +527,43 @@ def _build_segments(
     return _merge_touching(segments)
 
 
-def _segment_for(words, first: int, last: int, duration: float, policy: CutPolicy) -> Segment:
+def _segment_for(
+    words, first: int, last: int, duration: float, policy: CutPolicy, silences=None
+) -> Segment:
     previous_end = words[first - 1].end if first > 0 else 0.0
     following_start = words[last + 1].t if last + 1 < len(words) else duration
     start = max(previous_end, words[first].t - policy.lead_in, 0.0)
     end = min(following_start, words[last].end + policy.lead_out, duration)
+
+    # Where the waveform says the voice stops and starts, the edges follow it
+    # instead of the transcript: the same amount of air by ear rather than by
+    # timestamp, which is what makes two pieces sound joined.
+    if silences:
+        quiet = _silence_at(silences, words[last].end)
+        if quiet is not None:
+            # Never before the word's own end: a late transcript must not cost
+            # a syllable.
+            end = min(end, max(words[last].end + 0.04, quiet.start + policy.tail_air))
+        hush = _silence_at(silences, words[first].t, before=True)
+        if hush is not None:
+            # The sound may resume before the transcript's first word — a
+            # breath, the first consonant — so the edge follows the waveform
+            # in both directions, and never past the word itself.
+            start = min(max(hush.end - policy.head_air, previous_end), words[first].t)
     return Segment(start=start, end=end, first_word=first, last_word=last)
+
+
+def _silence_at(silences, position: float, *, before: bool = False, reach: float = 0.6):
+    """The measured silence that touches `position`: the one that begins just
+    after a word ends, or the one that ends just before a word starts."""
+    best = None
+    for silence in silences:
+        if before:
+            if -0.05 <= position - silence.end <= reach:
+                best = silence
+        elif -0.05 <= silence.start - position <= reach:
+            return silence
+    return best
 
 
 def _merge_touching(segments: list[Segment]) -> list[Segment]:
