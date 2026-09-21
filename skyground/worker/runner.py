@@ -58,6 +58,41 @@ PROXY_FORMATS = {
 }
 
 
+#: Jobs that hold hundreds of megabytes while they run. On the shared
+#: instance the API lives in the same container, so starting one of these
+#: with the ceiling already close takes the whole studio down, not the job.
+HEAVY = ("analyze", "full", "proxy", "rebuild", "render")
+
+#: How much has to be free before a heavy job is claimed.
+HEADROOM_BYTES = 700 * 1024 * 1024
+
+
+def memory_free(root=None) -> int | None:
+    """Bytes still available to this container, or None where it cannot be
+    known (a Mac, a machine without cgroups): there the guard stands aside."""
+    import pathlib as _pathlib
+
+    root = _pathlib.Path(root) if root else _pathlib.Path("/sys/fs/cgroup")
+    try:
+        limit_text = (root / "memory.max").read_text().strip()
+        used = int((root / "memory.current").read_text().strip())
+    except (OSError, ValueError):
+        try:  # cgroup v1
+            limit_text = (root / "memory/memory.limit_in_bytes").read_text().strip()
+            used = int((root / "memory/memory.usage_in_bytes").read_text().strip())
+        except (OSError, ValueError):
+            return None
+    if limit_text == "max":
+        return None
+    try:
+        limit = int(limit_text)
+    except ValueError:
+        return None
+    if limit <= 0 or limit > 1 << 50:  # no real limit set
+        return None
+    return max(0, limit - used)
+
+
 class NotSupported(StudioError):
     """Raised by a handler that cannot run yet: the job fails without retrying."""
 
@@ -94,6 +129,13 @@ class Worker:
             "transcribe": self.handle_unsupported,
         }
 
+    def short_of_memory(self) -> bool:
+        """Whether a heavy job would start too close to the ceiling."""
+        if self.kinds is not None and not any(kind in HEAVY for kind in self.kinds):
+            return False
+        free = memory_free()
+        return free is not None and free < HEADROOM_BYTES
+
     # ------------------------------------------------------------------- loop
 
     def run_forever(self) -> None:
@@ -112,6 +154,13 @@ class Worker:
 
     def run_once(self) -> bool:
         """Run at most one job. Returns True when something was claimed."""
+        if self.short_of_memory():
+            logger.warning(
+                "memoria quasi finita (%s liberi): aspetto prima di prendere un altro lavoro",
+                _megabytes(memory_free()),
+            )
+            time.sleep(self.settings.worker_poll_seconds * 5)
+            return False
         with self.session_factory() as session:
             job = job_service.claim(session, self.name, kinds=self.kinds)
             session.commit()
@@ -157,7 +206,9 @@ class Worker:
     def reap_orphans(self) -> int:
         """Requeue what a previous worker of this host left running."""
         with self.session_factory() as session:
-            count = job_service.reap_orphans(session, self.name)
+            count = job_service.reap_orphans(
+                session, self.name, sole=getattr(self.settings, "worker_sole", True)
+            )
             session.commit()
         if count:
             logger.warning("%s job lasciati a metà da un worker precedente rimessi in coda", count)
@@ -538,3 +589,7 @@ def _render_elsewhere(slug: str, missing: list[str]) -> str:
         f"il render non parte qui: mancano {', '.join(missing)}. "
         f"Si rende sul Mac che ha i media: python3 studio.py render-remote {slug}"
     )
+
+
+def _megabytes(value: int | None) -> str:
+    return "?" if value is None else f"{value // (1024 * 1024)} MB"

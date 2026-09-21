@@ -106,6 +106,10 @@ class Settings:
     #: 'fixture:<path>' to replay a transcript that already exists.
     transcription_provider: str = "local"
     transcription_model: str = "small"
+    #: Greedy decoding by default: a wider beam costs memory and time, and on
+    #: a clean take buys punctuation rather than words.
+    transcription_beam_size: int = 1
+    transcription_threads: int = 2
     transcription_api_key: str = ""
     #: Where the speech model's weights are cached. Empty means "wherever the
     #: library puts them", which is right on a laptop and wrong on a container
@@ -139,6 +143,9 @@ class Settings:
     #: A draft names its own folder by absolute path, so this has to be known.
     capcut_drafts: str = ""
     worker_poll_seconds: float = 2.0
+    #: One worker at a time in this deployment: a job held by any other name
+    #: belongs to a worker that is gone, and goes back in the queue at start.
+    worker_sole: bool = True
     worker_job_timeout_seconds: int = 3600
     #: False when `secret_key` is the derived development key rather than a
     #: value somebody set. Production requires an explicit one.
@@ -245,6 +252,8 @@ def load_settings(environ: dict | None = None) -> Settings:
         allowed_origins=tuple(item.strip() for item in origins.split(",") if item.strip()),
         transcription_provider=_env("SKYGROUND_TRANSCRIPTION_PROVIDER", "local") or "local",
         transcription_model=_env("SKYGROUND_TRANSCRIPTION_MODEL", "small") or "small",
+        transcription_beam_size=int(_env("SKYGROUND_TRANSCRIPTION_BEAM", "1") or 1),
+        transcription_threads=int(_env("SKYGROUND_TRANSCRIPTION_THREADS", "2") or 2),
         transcription_api_key=_env("SKYGROUND_TRANSCRIPTION_API_KEY", "") or "",
         model_cache_root=_env("SKYGROUND_MODEL_CACHE_ROOT", "") or "",
         proxy_codec=(_env("SKYGROUND_PROXY_CODEC", "h264") or "h264").strip().lower(),
@@ -257,6 +266,7 @@ def load_settings(environ: dict | None = None) -> Settings:
         editor_model=_env("SKYGROUND_EDITOR_MODEL", "claude-opus-5") or "claude-opus-5",
         capcut_drafts=_env("SKYGROUND_CAPCUT_DRAFTS", "") or "",
         worker_poll_seconds=float(_env("SKYGROUND_WORKER_POLL_SECONDS", "2") or 2),
+        worker_sole=_flag("SKYGROUND_WORKER_SOLE", True),
         worker_job_timeout_seconds=_int("SKYGROUND_WORKER_JOB_TIMEOUT_SECONDS", 3600),
         secret_key_is_explicit=secret_is_explicit,
         admin_email=_env("SKYGROUND_ADMIN_EMAIL", "") or "",

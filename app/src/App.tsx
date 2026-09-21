@@ -62,6 +62,8 @@ export default function App() {
   const sequenceRef = useRef<Sequence>(EMPTY);
   const previewRef = useRef<Sequence | null>(null);
   const trimRef = useRef<TrimInfo | null>(null);
+  /** One refresh of the signed media links at a time, and not in a loop. */
+  const refreshing = useRef(false);
 
   useEffect(() => {
     void (async () => {
@@ -373,7 +375,12 @@ export default function App() {
   }
   if (!project || !cut) return <Empty title="Carico il progetto…" />;
 
-  const src = cut.media?.proxy ?? cut.analysis?.proxyUrl ?? `/media/${project.id}/${plan?.source ?? "assets/raw.mov"}`;
+  // The camera original is usually HEVC in a .mov, which no browser decodes:
+  // offering it to the player only produced «il video non si carica» while the
+  // preview was still being made. Without a playable copy, say so instead.
+  const camera = plan?.source ?? "assets/raw.mov";
+  const playableCamera = /\.(mp4|m4v|webm)$/i.test(camera) ? `/media/${project.id}/${camera}` : null;
+  const src = cut.media?.proxy ?? cut.analysis?.proxyUrl ?? playableCamera;
   const open = plan ? plan.questions.filter((q) => !q.resolved).length : 0;
   const engineDecided = plan ? plan.questions.filter((q) => q.answeredBy === ENGINE).length : 0;
 
@@ -493,7 +500,17 @@ export default function App() {
                 clock={clock}
                 getSequence={() => previewRef.current ?? sequenceRef.current}
                 onPlayingChange={(value) => { setPlaying(value); if (!value) setPlayingOption(null); }}
-                onError={(message) => setNotice(message)}
+                onError={(message) => {
+                  // A signed media link lasts four hours; a page left open all
+                  // afternoon then plays nothing and blames the video. Ask the
+                  // server for a fresh one before saying anything to anybody.
+                  if (refreshing.current) { setNotice(message); return; }
+                  refreshing.current = true;
+                  void api.cut(project.id)
+                    .then((fresh) => { setCut(fresh); })
+                    .catch(() => setNotice(message))
+                    .finally(() => { window.setTimeout(() => { refreshing.current = false; }, 4000); });
+                }}
               />
               {src && (
                 <div className={trimming ? "trim-layer on" : "trim-layer"} aria-hidden={!trimming}>

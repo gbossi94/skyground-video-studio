@@ -245,8 +245,12 @@ export const Player = forwardRef<PlayerHandle, Props>(function Player(
   if (!src) {
     return (
       <div className="screen screen-empty">
-        <p>Il girato non è ancora riproducibile</p>
-        <small>Il file della camera è in un formato che i browser non decodificano. Il worker ne sta preparando una copia.</small>
+        <p>Anteprima in preparazione</p>
+        <small>
+          Il file della camera è in un formato che i browser non sanno leggere: lo studio ne sta
+          facendo una copia leggera, con la forma d'onda e le miniature. I tagli si possono già
+          guardare sulla timeline; la pagina si aggiorna da sola quando è pronta.
+        </small>
       </div>
     );
   }

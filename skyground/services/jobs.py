@@ -198,24 +198,29 @@ def release(session: Session, job: RenderJob, reason: str) -> RenderJob:
     return job
 
 
-def reap_orphans(session: Session, worker: str) -> int:
-    """Requeue the jobs a previous worker of this same host left running.
+def reap_orphans(session: Session, worker: str, *, sole: bool = False) -> int:
+    """Requeue the jobs a previous worker left running.
 
-    A worker is named `host:pid`. When the container restarts — the browser
-    renderer ran the host out of memory, a deploy landed mid-job — the new
-    worker starts on the same host with a new pid, and whatever the old one
-    held is still marked running with nobody working on it. Waiting for the
-    stall timeout would leave the film an hour late; the host itself is the
-    proof that the old worker is gone.
+    A worker is named `host:pid`. When the container restarts — a deploy
+    landed mid-job, the instance met its memory limit — whatever the old
+    worker held is still marked running with nobody working on it, and the
+    stall timeout would leave the film an hour late.
+
+    `sole` says this deployment runs exactly one worker at a time (the
+    combined image does): then any other name is a dead worker, whatever the
+    host. Without it only the same host counts, because on a machine where
+    two workers share the queue the other one may well be alive — on Render
+    the host name changes at every deploy, which is how a preview sat an hour
+    marked "in corso" with nobody encoding it.
     """
     host = worker.rsplit(":", 1)[0]
-    orphans = session.scalars(
-        select(RenderJob).where(
-            RenderJob.status == JOB_RUNNING,
-            RenderJob.locked_by.like(f"{host}:%"),
-            RenderJob.locked_by != worker,
-        )
-    ).all()
+    query = select(RenderJob).where(
+        RenderJob.status == JOB_RUNNING,
+        RenderJob.locked_by != worker,
+    )
+    if not sole:
+        query = query.where(RenderJob.locked_by.like(f"{host}:%"))
+    orphans = session.scalars(query).all()
     for job in orphans:
         fail(session, job, f"il worker {job.locked_by} è stato riavviato mentre lavorava")
     return len(orphans)

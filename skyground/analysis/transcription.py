@@ -47,7 +47,15 @@ class FixtureTranscriber:
 
 
 class LocalWhisperTranscriber:
-    """Whisper in the worker. Slower than an API, but needs no credential."""
+    """Whisper in the worker. Slower than an API, but needs no credential.
+
+    It runs in a child process. The model and its arenas are a gigabyte while
+    a six minute take is being heard, and a long-lived Python process hands
+    almost none of that back to the system: on a two gigabyte instance the
+    next job — or the web service beside it — met the ceiling and the whole
+    container was restarted. A child process gives every byte back when it
+    exits, and the worker that waits for it stays at a hundred megabytes.
+    """
 
     name = "whisper-local"
 
@@ -56,9 +64,21 @@ class LocalWhisperTranscriber:
         model: str = "small",
         compute_type: str = "int8",
         cache_root: pathlib.Path | str | None = None,
+        *,
+        beam_size: int = 1,
+        cpu_threads: int = 2,
+        in_process: bool = False,
     ):
         self.model_name = model
         self.compute_type = compute_type
+        #: Greedy by default: a beam of five holds five hypotheses per frame
+        #: and buys, on speech this clean, punctuation rather than words.
+        self.beam_size = beam_size
+        #: Each thread keeps its own working buffers; two is the knee of the
+        #: curve on a shared two-core instance.
+        self.cpu_threads = cpu_threads
+        #: Tests and the CLI can keep it here, where a traceback is readable.
+        self.in_process = in_process
         #: Where the weights are kept. On a deployment this belongs on the
         #: mounted disk: the container's own filesystem is thrown away at every
         #: deploy, and half a gigabyte of model with it.
@@ -80,13 +100,20 @@ class LocalWhisperTranscriber:
                 self.model_name,
                 device="cpu",
                 compute_type=self.compute_type,
+                cpu_threads=self.cpu_threads,
                 download_root=str(self.cache_root) if self.cache_root else None,
             )
         return self._model
 
     def transcribe(self, audio: pathlib.Path, *, language: str = "it") -> list[Word]:
+        if self.in_process:
+            return self._transcribe_here(audio, language)
+        return self._transcribe_apart(audio, language)
+
+    def _transcribe_here(self, audio: pathlib.Path, language: str) -> list[Word]:
         segments, _info = self._load().transcribe(
-            str(audio), language=language, word_timestamps=True, vad_filter=False, beam_size=5
+            str(audio), language=language, word_timestamps=True,
+            vad_filter=False, beam_size=self.beam_size,
         )
         words: list[Word] = []
         for segment in segments:
@@ -95,6 +122,28 @@ class LocalWhisperTranscriber:
                 if text:
                     words.append(Word(t=word.start, end=word.end, s=text, p=word.probability))
         return words
+
+    def _transcribe_apart(self, audio: pathlib.Path, language: str) -> list[Word]:
+        """The same, in a child process that exits when the words are out."""
+        import subprocess
+        import sys
+
+        payload = json.dumps({
+            "audio": str(audio), "language": language, "model": self.model_name,
+            "compute_type": self.compute_type, "beam_size": self.beam_size,
+            "cpu_threads": self.cpu_threads,
+            "cache_root": str(self.cache_root) if self.cache_root else "",
+        })
+        result = subprocess.run(
+            [sys.executable, "-m", "skyground.analysis.transcribe_once"],
+            input=payload, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or "").strip().splitlines()
+            raise StudioError(
+                "la trascrizione non è riuscita: " + (detail[-1] if detail else f"codice {result.returncode}")
+            )
+        return [Word.from_dict(word) for word in json.loads(result.stdout)["words"]]
 
 
 class DeepgramTranscriber:
@@ -171,6 +220,8 @@ def build_transcriber(settings=None) -> Transcriber:
         return LocalWhisperTranscriber(
             model=settings.transcription_model or "small",
             cache_root=settings.model_cache_root or None,
+            beam_size=getattr(settings, "transcription_beam_size", 1),
+            cpu_threads=getattr(settings, "transcription_threads", 2),
         )
     if provider.startswith("fixture:"):
         return FixtureTranscriber(provider.split(":", 1)[1])
