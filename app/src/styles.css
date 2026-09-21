@@ -542,3 +542,7 @@ button { cursor: pointer; background: none; border: 0; padding: 0; }
 
 .sheet-backdrop { position: fixed; inset: 0; z-index: 19; background: rgba(0, 0, 0, .5); backdrop-filter: blur(2px); }
 .sheet.new-sheet { left: 50%; top: 22vh; right: auto; transform: translateX(-50%); width: 420px; }
+.new-actions { display: flex; flex-direction: column; gap: 7px; }
+.new-actions button { height: 34px; padding: 0 14px; border-radius: var(--radius-sm); font-size: 12.5px; font-weight: 650; }
+.new-sheet .context { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--ink-2); }
+.new-sheet .context b { color: var(--ink); font-weight: 650; }

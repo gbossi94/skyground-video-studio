@@ -32,7 +32,12 @@ def project_payload(project: Project, workspace: Workspace, documents=None) -> d
         manifest = {"id": project.slug, "name": project.name, "canvas": {}, "path": None,
                     "previewAvailable": False}
     else:
-        manifest = dict(documents.read(project, "project.json").content) if documents else {}
+        try:
+            manifest = dict(documents.read(project, "project.json").content) if documents else {}
+        except Exception:
+            # A project whose files went missing must not take the whole list
+            # down with it: it is shown, empty, and can be opened or removed.
+            manifest = {}
         manifest.setdefault("id", project.slug)
         manifest.setdefault("name", project.name)
         manifest.setdefault("canvas", project.canvas)

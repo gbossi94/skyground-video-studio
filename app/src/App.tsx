@@ -20,6 +20,8 @@ import { build, clipAt, joins, sourceAt, type CutSource, type Sequence } from ".
 import type { CutPlan, CutState, Option, Question, Transcript } from "./types";
 
 type SaveState = "salvato" | "non salvato" | "salvataggio…" | "conflitto";
+/** The value the project menu uses for its last entry, which is not a project. */
+const NEW = "__nuovo__";
 const EMPTY: Sequence = { clips: [], cuts: [], duration: 0 };
 
 export default function App() {
@@ -340,10 +342,19 @@ export default function App() {
 
   // ------------------------------------------------------------------ view
 
+  /** One door into a new film: the button and the project menu both open
+   *  this, and it says what is being left before it takes a name. */
   const sheet = creating && (
     <NewProject
+      leaving={project ? { name: project.name, dirty, onSave: save } : null}
       onClose={() => setCreating(false)}
-      onCreated={(made) => { setProjects((current) => [made, ...current]); setCut(null); setProject(made); }}
+      onCreated={(made) => {
+        setProjects((current) => [made, ...current]);
+        setCut(null); setTranscript(null); setHistory(null); setBaseline(null);
+        setSelection(null); setConflict(null); setSaveState("salvato"); setTab("clip");
+        clock.current = 0;
+        setProject(made);
+      }}
     />
   );
 
@@ -380,21 +391,19 @@ export default function App() {
       <header className="bar">
         <div className="bar-left">
           <span className="mark" aria-hidden>S</span>
-          {projects.length > 1 ? (
-            <select
-              className="picker"
-              value={project.id}
-              aria-label="Progetto"
-              onChange={(event) => {
-                const next = projects.find((item) => item.id === event.target.value);
-                if (next) { setCut(null); setProject(next); }
-              }}
-            >
-              {projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          ) : (
-            <h1>{project.name}</h1>
-          )}
+          <select
+            className="picker"
+            value={project.id}
+            aria-label="Progetto"
+            onChange={(event) => {
+              if (event.target.value === NEW) { setCreating(true); return; }
+              const next = projects.find((item) => item.id === event.target.value);
+              if (next && next.id !== project.id) { setCut(null); setTranscript(null); setHistory(null); setBaseline(null); setSelection(null); setProject(next); }
+            }}
+          >
+            {projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            <option value={NEW}>＋ Nuovo video…</option>
+          </select>
           {plan && (
             <Meter film={film} source={sourceDuration} />
           )}
