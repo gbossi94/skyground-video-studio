@@ -196,6 +196,60 @@ def test_the_edges_follow_the_measured_silence_not_the_transcript():
     assert heard == pytest.approx(0.20, abs=0.02)
 
 
+def test_a_short_pause_is_shared_between_the_two_pieces_it_separates():
+    """The real case that stopped a film in production: 0.34s between two
+    words, a lead-out of 0.28 and a lead-in of 0.12. Asking for both leaves
+    the two pieces overlapping — «segmenti sovrapposti» — so the pause is
+    shared, and what is left of it is the pause the policy wants to keep."""
+    from skyground.analysis.models import Silence
+
+    first, end = speak(1.0, "prima parte della frase")
+    # 0.34s later: long enough for the engine to cut, too short for the air.
+    second, _ = speak(end + 0.34, "seconda parte della frase.")
+    analysis = analysis_of(first, second)
+    measured = Analysis(
+        source=analysis.source, duration=analysis.duration, words=analysis.words,
+        silences=[Silence(start=first[-1].end, end=second[0].t)],
+    )
+    policy = CutPolicy()
+
+    plan = plan_cut(measured, policy)
+    pieces = [s for s in plan.segments if s.first_word is not None]
+    for before, after in zip(pieces, pieces[1:]):
+        assert after.start >= before.end - 1e-6, "due pezzi che si sovrappongono"
+    kept_pause = sum(
+        after.start - before.end for before, after in zip(pieces, pieces[1:])
+        if after.first_word == before.last_word + 1
+    )
+    assert kept_pause == pytest.approx(0.34 - policy.keep_pause, abs=0.02) or kept_pause == 0
+    assert invariants.check(plan, measured) == []
+
+
+def test_two_pieces_never_overlap_when_the_silences_disagree():
+    """The measured silence after one word and the one before the next can be
+    two different stretches of quiet: read literally they put the second
+    piece's start before the first piece's end, and production refused the
+    plan with «segmenti sovrapposti» on a film that was otherwise fine."""
+    from skyground.analysis.models import Silence
+
+    first, end = speak(1.0, "una frase lunga che continua")
+    second, _ = speak(end + 1.5, "e riprende dopo la pausa.")
+    analysis = analysis_of(first, second)
+    last_word = first[-1]
+    measured = Analysis(
+        source=analysis.source, duration=analysis.duration, words=analysis.words,
+        silences=[
+            Silence(start=last_word.end + 0.45, end=last_word.end + 0.6),   # sound ran on
+            Silence(start=last_word.end + 0.7, end=second[0].t - 0.4),      # then the real pause
+        ],
+    )
+
+    plan = plan_cut(measured)
+    for before, after in zip(plan.segments, plan.segments[1:]):
+        assert after.start >= before.end - 1e-6, "due pezzi che si sovrappongono"
+    assert invariants.check(plan, measured) == []
+
+
 # ------------------------------------------------------------------- the takes
 
 

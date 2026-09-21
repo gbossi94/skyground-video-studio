@@ -503,6 +503,37 @@ def _build_segments(
             segment = _segment_for(
                 words, piece_first, piece_last, analysis.duration, policy, analysis.silences
             )
+            # Two pieces of the same run are the two sides of a pause that is
+            # being trimmed, and the air each one asks for can be longer than
+            # the pause itself: at 0.34s between two words, a lead-out of 0.28
+            # and a lead-in of 0.12 overlap, and production refused the plan
+            # with «segmenti sovrapposti». The pause is shared instead, in the
+            # proportion the policy asks for, and what is left of it is the
+            # pause the film keeps.
+            if segments and segments[-1].last_word is not None and segment.first_word is not None:
+                before = segments[-1]
+                adjacent = before.last_word + 1 == segment.first_word
+                gap_start, gap_end = words[before.last_word].end, words[segment.first_word].t
+                gap = gap_end - gap_start
+                if adjacent and segment.start <= before.end + 1e-9:
+                    keep = min(policy.keep_pause, max(0.0, gap))
+                    share = policy.tail_air / max(policy.tail_air + policy.head_air, 1e-6)
+                    cut_at = gap_start + keep * share
+                    segments[-1] = Segment(
+                        before.start, min(before.end, max(gap_start, cut_at)),
+                        before.label, before.first_word, before.last_word,
+                    )
+                    segment = Segment(
+                        max(segments[-1].end, min(gap_end, gap_end - keep * (1 - share))),
+                        segment.end, segment.label, segment.first_word, segment.last_word,
+                    )
+                elif segment.start < before.end:
+                    # Pieces from different runs, whose measured silences
+                    # disagreed: the later one gives way.
+                    segment = Segment(
+                        before.end, max(segment.end, before.end),
+                        segment.label, segment.first_word, segment.last_word,
+                    )
             if segment.duration < policy.min_segment:
                 # Too short to stand alone: glue it to the previous segment when
                 # they are adjacent in the source, otherwise leave it out and let
