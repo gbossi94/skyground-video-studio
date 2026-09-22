@@ -77,9 +77,12 @@ class CutPolicy:
     min_segment: float = 0.35
     #: A pause is only worth a cut if both sides can stand as a piece of film.
     #: Below this — «ti», alone, between two cuts — the pause stays whole and
-    #: the sentence keeps its shape.
+    #: the sentence keeps its shape…
     min_piece: float = 0.60
     min_piece_words: int = 2
+    #: …up to here. A pause longer than this is worse than any stutter — nine
+    #: seconds of silence in the middle of a film — and is always cut.
+    long_pause: float = 0.80
     #: Two utterances this similar are certainly the same line…
     certain_similarity: float = 0.60
     #: …and this similar are worth asking about.
@@ -493,7 +496,9 @@ def _build_segments(
             gap = words[index + 1].t - words[index].end
             if gap <= policy.max_pause:
                 continue
-            if not _worth_a_cut(words, piece_start, index, last, policy, analysis.silences):
+            if gap <= policy.long_pause and not _worth_a_cut(
+                words, piece_start, index, last, policy, analysis.silences
+            ):
                 continue
             if gap >= policy.rhetorical_pause and not _ends_sentence(words[index].s):
                 question = _pause_question(words[index].end, words[index + 1].t, gap, words, index)
