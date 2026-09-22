@@ -45,6 +45,11 @@ from skyground.analysis.models import (
 #: colpo d'occhio da una fatta da qualcuno — e si cambia con un clic.
 ENGINE = "motore"
 
+#: How far a "word" may stick out of a measured silence and still be a breath
+#: rather than speech: the transcriber's edges are approximate, not the
+#: waveform's.
+BREATH_TOLERANCE = 0.02
+
 
 @dataclass(frozen=True)
 class CutPolicy:
@@ -500,6 +505,12 @@ def _build_segments(
         pieces.append((piece_start, last))
 
         for piece_first, piece_last in pieces:
+            # A piece the waveform says is silent is not speech: the
+            # transcriber hears a word in a breath — one «e» inside three and
+            # a half seconds of measured quiet — and keeping it puts a second
+            # of silence in the film between two cuts.
+            if _is_breath(words, piece_first, piece_last, analysis.silences):
+                continue
             segment = _segment_for(
                 words, piece_first, piece_last, analysis.duration, policy, analysis.silences
             )
@@ -582,6 +593,17 @@ def _segment_for(
             # in both directions, and never past the word itself.
             start = min(max(hush.end - policy.head_air, previous_end), words[first].t)
     return Segment(start=start, end=end, first_word=first, last_word=last)
+
+
+def _is_breath(words, first: int, last: int, silences) -> bool:
+    """Whether every word of a piece falls inside one measured silence."""
+    if not silences:
+        return False
+    start, end = words[first].t, words[last].end
+    return any(
+        silence.start <= start + BREATH_TOLERANCE and silence.end >= end - BREATH_TOLERANCE
+        for silence in silences
+    )
 
 
 def _silence_at(silences, position: float, *, before: bool = False, reach: float = 0.6):

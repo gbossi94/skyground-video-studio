@@ -225,6 +225,32 @@ def test_a_short_pause_is_shared_between_the_two_pieces_it_separates():
     assert invariants.check(plan, measured) == []
 
 
+def test_a_word_the_waveform_says_is_silence_does_not_reach_the_film():
+    """A breath the transcriber heard as «e». In production it became a piece
+    of 0.77s with a cut on either side of it and a second of silence in the
+    middle of the film: the audio knows better than the transcript."""
+    from skyground.analysis.models import Silence
+
+    first, end = speak(1.0, "questo settembre pieno di clienti.")
+    breath, _ = speak(end + 2.5, "e")
+    second, _ = speak(end + 4.0, "alla fine non perdi niente.")
+    analysis = analysis_of(first, breath, second)
+    quiet = Silence(start=first[-1].end + 0.3, end=second[0].t - 0.3)
+    measured = Analysis(
+        source=analysis.source, duration=analysis.duration,
+        words=analysis.words, silences=[quiet],
+    )
+
+    plan = plan_cut(measured)
+    kept = [
+        word.s for segment in plan.segments
+        for word in measured.words[segment.first_word : segment.last_word + 1]
+    ]
+    assert "e" not in kept, "un respiro non è una parola"
+    assert "clienti." in kept and "niente." in kept
+    assert invariants.check(plan, measured) == []
+
+
 def test_two_pieces_never_overlap_when_the_silences_disagree():
     """The measured silence after one word and the one before the next can be
     two different stretches of quiet: read literally they put the second
