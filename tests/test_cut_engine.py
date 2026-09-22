@@ -225,6 +225,19 @@ def test_a_short_pause_is_shared_between_the_two_pieces_it_separates():
     assert invariants.check(plan, measured) == []
 
 
+def test_a_pause_is_not_cut_when_it_would_leave_one_word_alone():
+    """«ti» came out as its own piece between two cuts, and the sentence
+    «ti diremo…» started with a stutter. The pause stays whole instead."""
+    first, end = speak(1.0, "e adesso ti")
+    second, _ = speak(end + 0.5, "diremo con quale campagna uscire.")
+    analysis = analysis_of(first, second)
+
+    plan = plan_cut(analysis)
+    for segment in plan.segments:
+        words = plan.segments and analysis.words[segment.first_word : segment.last_word + 1]
+        assert len(words) > 1, f"un pezzo di una parola sola: «{words[0].s}»"
+
+
 def test_a_word_the_waveform_says_is_silence_does_not_reach_the_film():
     """A breath the transcriber heard as «e». In production it became a piece
     of 0.77s with a cut on either side of it and a second of silence in the

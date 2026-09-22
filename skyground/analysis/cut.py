@@ -75,6 +75,11 @@ class CutPolicy:
     tail_air: float = 0.12
     #: Shorter than this is a glitch, not a cut.
     min_segment: float = 0.35
+    #: A pause is only worth a cut if both sides can stand as a piece of film.
+    #: Below this — «ti», alone, between two cuts — the pause stays whole and
+    #: the sentence keeps its shape.
+    min_piece: float = 0.60
+    min_piece_words: int = 2
     #: Two utterances this similar are certainly the same line…
     certain_similarity: float = 0.60
     #: …and this similar are worth asking about.
@@ -488,6 +493,8 @@ def _build_segments(
             gap = words[index + 1].t - words[index].end
             if gap <= policy.max_pause:
                 continue
+            if not _worth_a_cut(words, piece_start, index, last, policy, analysis.silences):
+                continue
             if gap >= policy.rhetorical_pause and not _ends_sentence(words[index].s):
                 question = _pause_question(words[index].end, words[index + 1].t, gap, words, index)
                 # Recorded either way: open when nobody has ruled on it, marked
@@ -593,6 +600,26 @@ def _segment_for(
             # in both directions, and never past the word itself.
             start = min(max(hush.end - policy.head_air, previous_end), words[first].t)
     return Segment(start=start, end=end, first_word=first, last_word=last)
+
+
+def _worth_a_cut(words, piece_start: int, index: int, last: int, policy: CutPolicy, silences=None) -> bool:
+    """Whether splitting at this pause leaves two pieces of film on either
+    side. A piece of one word — «ti», between two cuts — is a stutter, and
+    the pause it was meant to save is shorter than the damage.
+
+    A side that the waveform says is silence is the exception: it is not a
+    piece of film at all, it is a breath, and cutting it out is the point.
+    """
+
+    def stands(first_word: int, last_word: int) -> bool:
+        if silences and _is_breath(words, first_word, last_word, silences):
+            return True
+        return (
+            last_word - first_word + 1 >= policy.min_piece_words
+            and words[last_word].end - words[first_word].t >= policy.min_piece
+        )
+
+    return stands(piece_start, index) and stands(index + 1, last)
 
 
 def _is_breath(words, first: int, last: int, silences) -> bool:
