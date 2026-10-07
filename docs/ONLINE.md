@@ -18,7 +18,7 @@ dipende da nessun altro fornitore.
 ## Primo deploy
 
 1. Su Render, **New → Blueprint**, scegli `gbossi94/skyground-video-studio` e il
-   branch `claude/phase-2-smart-cut`. Render legge `render.yaml` e crea il
+   branch `main`. Render legge `render.yaml` e crea il
    servizio con il disco e il database già collegati.
 2. Alla fine, apri l'URL del servizio. Non esiste ancora nessun account: la
    schermata ti chiede di crearne uno, quello diventa l'amministratore e riceve i
