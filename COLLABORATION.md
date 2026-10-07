@@ -78,15 +78,17 @@ Alcuni test con FFmpeg falliscono anche sul ramo pulito (13 al momento in cui è
 
 ## Come si lavora
 
-- **La produzione** (https://skyground-studio.onrender.com) si aggiorna da sola a ogni push sul ramo `claude/phase-2-smart-cut`. Un deploy riavvia il server e interrompe i caricamenti in corso.
-- **Non si fa push su quel ramo.** Si parte da lì, si lavora su un ramo proprio e si apre una pull request verso `claude/phase-2-smart-cut`. La pubblica Gabriele.
+- **La produzione** (https://skyground-studio.onrender.com) si aggiorna da sola a ogni push sul ramo `claude/phase-2-smart-cut`. Un deploy riavvia il server e interrompe i caricamenti e i lavori in corso.
+- **Si lavora su un ramo proprio** che parte da `claude/phase-2-smart-cut`, e si apre una pull request verso di esso: resta la traccia di cosa è cambiato e perché. Non serve aspettare un'approvazione: quando i controlli sono verdi la unisci tu.
+- **Prima di pubblicare** controlla che in produzione nessuno stia caricando un video o aspettando un lavoro (nell'app, o nei log di Render). Sul ramo di produzione non si riscrive la storia e non si cancella: GitHub lo impedisce.
 
 ```bash
 git fetch origin
 git switch -c gianluca/nome-della-modifica origin/claude/phase-2-smart-cut
 # ... lavoro, commit ...
 git push -u origin gianluca/nome-della-modifica
-gh pr create --base claude/phase-2-smart-cut --draft
+gh pr create --base claude/phase-2-smart-cut
+gh pr merge --merge   # quando i controlli sono verdi
 ```
 
 - **Le credenziali non entrano mai nella repository**: niente chiavi, password o URL firmati nei file versionati. `.env` è ignorato da Git.
