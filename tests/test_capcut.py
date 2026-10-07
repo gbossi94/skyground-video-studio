@@ -8,7 +8,9 @@ and never in the repository.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import shutil
 import zipfile
 
 import pytest
@@ -194,6 +196,10 @@ def test_the_workspace_refuses_to_export_without_a_drafts_root(workspace):
         workspace.export(PROJECT, "capcut")
 
 
+@pytest.mark.skipif(
+    not (shutil.which("ffmpeg") or os.environ.get("FFMPEG_BIN")),
+    reason="la bozza CapCut legge il girato con FFmpeg",
+)
 def test_the_sample_is_uploaded_by_an_administrator_and_the_draft_downloaded(client, sign_in, make_user, registered_project, workspace, tmp_path):
     stand_in_raw(workspace)
     sample = make_sample(tmp_path / "campione")
