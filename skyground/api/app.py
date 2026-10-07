@@ -128,7 +128,7 @@ def _origin_allowed(origin: str, request: Request, settings: Settings) -> bool:
 
 
 def register_routes(app: FastAPI) -> None:
-    from skyground.api.routes import assets, auth, cut, jobs, media, projects
+    from skyground.api.routes import assets, auth, cut, invitations, jobs, media, projects
 
     @app.get("/api/health")
     @app.get("/healthz")
@@ -143,6 +143,7 @@ def register_routes(app: FastAPI) -> None:
         }
 
     app.include_router(auth.router)
+    app.include_router(invitations.router)
     app.include_router(projects.router)
     app.include_router(assets.router)
     app.include_router(jobs.router)

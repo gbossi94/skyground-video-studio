@@ -33,6 +33,22 @@ export interface ProjectSummary {
   hasSource?: boolean;
 }
 
+export interface Me {
+  id: string;
+  email: string;
+  name: string;
+  isAdmin: boolean;
+}
+
+export interface Invitation {
+  id: string;
+  email: string;
+  name: string;
+  admin: boolean;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export interface JobSummary {
   id: string;
   kind: string;
@@ -94,7 +110,17 @@ export const api = {
   createEmpty: (name: string) =>
     call<ProjectSummary>("/api/projects", { method: "POST", body: JSON.stringify({ name }) }),
   uploadSource,
-  me: () => call<{ user: { email: string }; authMode: string }>("/api/auth/me"),
+  me: () => call<{ user: Me; authMode: string }>("/api/auth/me"),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    call<{ ok: boolean }>("/api/auth/password", { method: "POST", body: JSON.stringify({ currentPassword, newPassword }) }),
+  invitations: () => call<Invitation[]>("/api/invitations"),
+  invite: (email: string, name: string, admin: boolean) =>
+    call<Invitation & { url: string }>("/api/invitations", { method: "POST", body: JSON.stringify({ email, name, admin }) }),
+  revokeInvitation: (id: string) => call<{ revoked: string }>(`/api/invitations/${id}`, { method: "DELETE" }),
+  openInvitation: (token: string) =>
+    call<{ email: string; name: string; admin: boolean }>(`/api/invitations/open/${encodeURIComponent(token)}`),
+  acceptInvitation: (token: string, password: string, name: string) =>
+    call<{ user: Me }>(`/api/invitations/open/${encodeURIComponent(token)}`, { method: "POST", body: JSON.stringify({ password, name }) }),
   createProject,
   fullCut: (slug: string) =>
     call<JobSummary>(`/api/projects/${slug}/cut/full`, { method: "POST", body: "{}" }),

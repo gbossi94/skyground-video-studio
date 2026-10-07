@@ -33,3 +33,4 @@ app/tsconfig.tsbuildinfo
 
 # Export per gli editor (FCPXML, SRT): si rigenerano da timeline e captions
 projects/*/exports/
+.claude/settings.local.json

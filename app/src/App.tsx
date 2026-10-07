@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, type ConflictPayload, type JobSummary, type ProjectSummary } from "./api";
+import { api, ApiError, type ConflictPayload, type JobSummary, type Me, type ProjectSummary } from "./api";
+import { AcceptInvite } from "./components/AcceptInvite";
 import { Inspector } from "./components/Inspector";
 import { Intake } from "./components/Intake";
 import { NewProject } from "./components/NewProject";
+import { People } from "./components/People";
 import { Player, type Clock, type PlayerHandle } from "./components/Player";
 import { ENGINE, Questions, reviewQueue } from "./components/Questions";
 import { ShortcutsHelp } from "./components/ShortcutsHelp";
@@ -20,6 +22,9 @@ import { build, clipAt, joins, sourceAt, type CutSource, type Sequence } from ".
 import type { CutPlan, CutState, Option, Question, Transcript } from "./types";
 
 type SaveState = "salvato" | "non salvato" | "salvataggio…" | "conflitto";
+/** An invitation link lands here as `/app/?invito=<token>`. */
+const INVITE = new URLSearchParams(window.location.search).get("invito");
+
 /** The value the project menu uses for its last entry, which is not a project. */
 const NEW = "__nuovo__";
 const EMPTY: Sequence = { clips: [], cuts: [], duration: 0 };
@@ -28,6 +33,8 @@ export default function App() {
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [creating, setCreating] = useState(false);
+  const [me, setMe] = useState<Me | null>(null);
+  const [people, setPeople] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [working, setWorking] = useState<JobSummary | null>(null);
   const [jobs, setJobs] = useState<JobSummary[]>([]);
@@ -66,12 +73,16 @@ export default function App() {
   const refreshing = useRef(false);
 
   useEffect(() => {
+    // Somebody opening an invitation has no session yet: no projects to load,
+    // and the redirect to the sign-in page would send them away from it.
+    if (INVITE) return;
     void (async () => {
       try {
         const list = await api.projects();
         setProjects(list);
         setLoaded(true);
         if (list.length) setProject(list[0]);
+        api.me().then((answer) => setMe(answer.user)).catch(() => undefined);
       } catch (cause) {
         // Without a session there is nothing to show here, and the sign-in
         // form lives on the panel at the root. Send the visitor there.
@@ -360,6 +371,7 @@ export default function App() {
     />
   );
 
+  if (INVITE) return <AcceptInvite token={INVITE} onDone={() => window.location.replace("/app/")} />;
   if (error) return <Empty title="Non riesco a mostrare il montaggio" detail={error} />;
   if (loaded && !project) {
     return (
@@ -423,6 +435,11 @@ export default function App() {
             <span className={`status ${saveState.replace("…", "").replace(" ", "-")}`}><i />{saveState}</span>
           )}
           <button className="btn ghost" onClick={() => setCreating(true)}>Nuovo</button>
+          {me && me.email !== "local@skyground.local" && (
+            <button className="avatar" onClick={() => setPeople(true)} title={me.isAdmin ? "Persone e la tua password" : "La tua password"} aria-label="Persone">
+              {(me.name || me.email).slice(0, 1).toUpperCase()}
+            </button>
+          )}
           <div className="dropdown">
             <button className="btn ghost" aria-expanded={exportOpen} onClick={() => setExportOpen((value) => !value)}>
               Esporta <Icon name="chevron" size={14} />
@@ -469,6 +486,7 @@ export default function App() {
       )}
       {sheet}
       {help && <ShortcutsHelp onClose={() => setHelp(false)} />}
+      {people && me && <People me={me} onClose={() => setPeople(false)} />}
 
       {project.hasSource === false || (!plan && (working || jobs.some((job) => job.kind === "analyze" || job.kind === "full"))) ? (
         <Intake

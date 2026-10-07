@@ -21,6 +21,7 @@ EXPECTED_TABLES = {
     "assets",
     "render_jobs",
     "audit_events",
+    "invitations",
 }
 
 

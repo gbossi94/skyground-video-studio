@@ -546,3 +546,38 @@ button { cursor: pointer; background: none; border: 0; padding: 0; }
 .new-actions button { height: 34px; padding: 0 14px; border-radius: var(--radius-sm); font-size: 12.5px; font-weight: 650; }
 .new-sheet .context { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--ink-2); }
 .new-sheet .context b { color: var(--ink); font-weight: 650; }
+
+/* ---------------------------------------------------------------- people */
+
+.avatar {
+  width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 12px; font-weight: 700; color: var(--ink); background: #26262e;
+  border: 1px solid var(--line); transition: border-color .15s var(--ease);
+}
+.avatar:hover { border-color: #4a4a55; }
+.sheet.people-sheet {
+  left: 50%; top: 10vh; right: auto; transform: translateX(-50%); width: 460px;
+  max-height: 80vh; overflow-y: auto; z-index: 20;
+}
+.people-block { display: flex; flex-direction: column; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.people-block h3 { margin: 0; font-size: 13px; font-weight: 650; }
+.new-form label.check { flex-direction: row; align-items: flex-start; gap: 8px; text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--ink-2); font-weight: 500; }
+.new-form label.check input { margin-top: 2px; }
+.invite-link { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: var(--radius-sm); background: #151a0c; border: 1px solid #3c5028; }
+.copy-row { display: flex; gap: 6px; }
+.copy-row input {
+  flex: 1; min-width: 0; font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink);
+  background: var(--sunken); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px;
+}
+.pending { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.pending li { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 7px; background: var(--raised); border: 1px solid var(--line); }
+.pending li span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pending li b { font-size: 12px; font-weight: 600; }
+.pending li small { font-size: 11px; color: var(--muted); }
+.invite-card {
+  width: min(400px, calc(100vw - 32px)); padding: 24px; border-radius: 14px; background: var(--panel);
+  border: 1px solid var(--line); display: flex; flex-direction: column; gap: 14px; text-align: left;
+}
+.invite-card h2 { margin: 0; font-size: 18px; }
+.invite-card .primary { height: 36px; border-radius: var(--radius-sm); background: var(--lime); color: var(--lime-ink); font-weight: 700; }
+.invite-card .primary:disabled { opacity: .5; cursor: not-allowed; }

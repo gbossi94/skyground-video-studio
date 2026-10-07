@@ -136,6 +136,33 @@ class AuthSession(Base):
     __table_args__ = (Index("ix_auth_sessions_user_id", "user_id"),)
 
 
+class Invitation(Base):
+    """A way in for somebody who has no account yet.
+
+    The link carries a token that is stored only hashed, works once, and
+    expires; the person who opens it chooses their own password. So nobody —
+    not the administrator, not an agent acting for them — ever handles
+    somebody else's password.
+    """
+
+    __tablename__ = "invitations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    name: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(
+        String(32), ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+    __table_args__ = (Index("ix_invitations_email", "email"),)
+
+
 class Project(Base, TimestampMixin):
     __tablename__ = "projects"
 
