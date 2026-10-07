@@ -83,17 +83,28 @@ def test_a_fresh_studio_shows_the_form_that_creates_the_first_account(page, stud
     assert page.locator("#signin-submit").inner_text() == "Crea l'account"
 
 
-def test_the_first_visitor_signs_up_and_lands_on_the_project(page, studio_url, workspace):
+def test_the_first_visitor_signs_up_and_lands_in_the_editor(page, studio_url, workspace):
     page.goto(studio_url)
     page.locator("#signin-form").wait_for(state="visible", timeout=10_000)
     page.fill("#email", "gabriele@skyground.online")
     page.fill("#password", PASSWORD)
     page.click("#signin-submit")
 
-    # The reload that follows lands on a signed-in panel with the project in it.
+    # The editor, not the file panel: landing on the panel after signing in
+    # made a working studio look as if it had lost its editor.
+    page.wait_for_url("**/app/", timeout=10_000)
+
+
+def test_the_file_panel_is_still_there_when_asked_for(page, studio_url, registered_project):
+    page.goto(f"{studio_url}/?pannello")
+    page.locator("#signin-form").wait_for(state="visible", timeout=10_000)
+    page.fill("#email", "owner@skyground.online")
+    page.fill("#password", PASSWORD)
+    page.click("#signin-submit")
+
     page.wait_for_selector(".project", timeout=10_000)
     assert PROJECT_ID in page.locator(".project").first.get_attribute("data-id")
-    assert "gabriele@skyground.online" in page.locator("#identity").inner_text()
+    assert "owner@skyground.online" in page.locator("#identity").inner_text()
     assert page.locator("#signin").is_hidden()
 
 

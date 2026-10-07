@@ -137,15 +137,21 @@ $("signin-form").onsubmit = async (event) => {
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({email: $("email").value, password: $("password").value})
     });
-    location.reload();
+    // After signing in the place to be is the editor, not this file panel:
+    // landing here made a working studio look as if it had lost its editor.
+    location.replace(WANTS_PANEL ? location.href : "/app/");
   } catch (error) {
     $("signin-message").textContent = error.message;
   }
 };
 
+/** `/?pannello` keeps this file panel; everything else signed in goes to the editor. */
+const WANTS_PANEL = new URLSearchParams(location.search).has("pannello");
+
 (async () => {
   try {
     identity = await body("/api/auth/me");
+    if (!WANTS_PANEL) { location.replace("/app/"); return; }
     renderIdentity();
     projects = await body("/api/projects");
     if (!projects.length) throw new Error("Nessun progetto disponibile");
