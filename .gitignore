@@ -17,4 +17,20 @@ __pycache__/
 *.pyc
 .env
 .env.*
+!.env.example
 node_modules/
+
+# Build output of the React editor; produced by `npm run build` in app/.
+web/app/
+
+# Local application state: SQLite database and local object storage.
+.skyground/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+app/tsconfig.tsbuildinfo
+
+# Export per gli editor (FCPXML, SRT): si rigenerano da timeline e captions
+projects/*/exports/
+.claude/settings.local.json

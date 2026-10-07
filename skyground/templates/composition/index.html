@@ -1,0 +1,21 @@
+<!doctype html><html><head><meta charset="utf-8"><script src="gsap.min.js"></script><style>
+@font-face{font-family:Jakarta;src:url(sans.ttf)}@font-face{font-family:Instrument;src:url(serif.ttf)}
+*{box-sizing:border-box}body{margin:0;background:#111}#main{width:1080px;height:1920px;position:relative;overflow:hidden;background:#111;color:#141414;font-family:Jakarta}#picture{position:absolute;width:1080px;height:1920px;transform-origin:50% 45%}video{width:1080px;height:1920px;object-fit:cover}
+#brand{position:absolute;top:65px;left:64px;font-size:23px;letter-spacing:5px;color:#fff;text-shadow:0 2px 12px #0008}#mark{position:absolute;right:64px;top:65px;font-size:23px;color:#5c0bfe}
+.cap{position:absolute;top:1570px;left:60px;width:960px;text-align:center;font-size:63px;line-height:1.15;opacity:0;color:white;text-shadow:0 3px 16px #000}.cap.long{font-size:61px}.shade{position:absolute;inset:1150px 0 0;background:linear-gradient(transparent,#0009)}
+.newcard{position:absolute;left:64px;right:64px;top:180px;padding:34px 38px;background:#f4f5f0;color:#141414;border-radius:24px;border-bottom:8px solid #5c0bfe;opacity:0}.newcard .clabel{font-size:22px;letter-spacing:4px;margin-bottom:18px;color:#5c0bfe}.newcard .cbody{font-size:56px;line-height:1.1;letter-spacing:-2px}.ctitle{font-size:64px;letter-spacing:-3px;line-height:1.05}
+#progress{position:absolute;left:0;bottom:0;height:10px;width:1080px;background:#5c0bfe;transform-origin:0 50%}
+</style></head><body><div id="main" data-composition-id="main" data-width="1080" data-height="1920" data-duration="1" data-captions-from="0" data-plain-render="1">
+<audio id="soundtrack" class="clip" src="soundtrack.m4a" data-start="0" data-duration="1" data-track-index="1"></audio><div id="picture"><video id="raw" class="clip" src="source.mp4" data-start="0" data-duration="1" data-track-index="0" muted></video></div><div class="shade"></div><div id="brand">SKYGROUND</div><div id="mark">✦</div>
+<div id="card-nessuna" class="newcard"></div><div id="captions"></div><div id="progress"></div></div><script>
+const tl=gsap.timeline({paused:true});
+tl.fromTo('#progress',{scaleX:0},{scaleX:1,duration:1,ease:'none'},0);
+
+const fullCards=[];
+fullCards.forEach(c=>{const sel='#card-'+c.id;tl.fromTo(sel,{opacity:0,y:65},{opacity:1,y:0,duration:.22,ease:'power3.out',immediateRender:false},c.a);tl.set(sel,{opacity:0},c.b);const children=document.querySelector(sel+' .cbody').children;tl.fromTo(children,{y:40,opacity:0},{y:0,opacity:1,duration:.32,stagger:.16,ease:'power3.out',immediateRender:false},c.a+.10);});
+const captionGroups=[];
+captionGroups.forEach((g,i)=>{const el=document.createElement('div');el.className='cap'+(g.map(w=>w.s).join(' ').length>22?' long':'');el.id='cap'+i;el.innerHTML=g.map(w=>'<span>'+w.s+'</span>').join(' ');document.getElementById('captions').appendChild(el);const a=g[0].t,b=g[g.length-1].end;tl.fromTo('#'+el.id,{opacity:0,y:18},{opacity:1,y:0,duration:.12,immediateRender:false},a);tl.set('#'+el.id,{opacity:0},b+.05);});
+const total=parseFloat(document.getElementById('main').dataset.duration);
+tl.duration(Math.max(tl.duration(),total));
+window.__timelines=window.__timelines||{};window.__timelines.main=tl;
+</script></body></html>

@@ -1,0 +1,7 @@
+-r requirements.txt
+httpx==0.28.1
+pytest==8.3.4
+# Browser tests. Without it (or without a Chromium) tests/test_browser_signin.py
+# skips: `playwright install chromium`, or point SKYGROUND_BROWSER_EXECUTABLE at
+# a Chromium already on the machine.
+playwright==1.62.0

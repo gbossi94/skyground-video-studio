@@ -1,0 +1,361 @@
+"""The smart cut over HTTP.
+
+Read the plan, answer a question, apply. Analysis is a job rather than a request
+because transcribing six minutes of footage takes longer than any sane timeout.
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, Body, Depends, Request, Response
+
+from skyground.analysis import align, manual
+from skyground.analysis.adviser import build_adviser
+from skyground.analysis.editor import build_model
+from skyground.api.deps import ProjectContext, get_settings, get_storage, project_context
+from skyground.config import Settings
+from skyground.errors import NotFound, ValidationError
+from skyground.services import assets as asset_service
+from skyground.services import cuts
+from skyground.services import jobs as job_service
+from skyground.storage import ObjectStorage
+
+router = APIRouter()
+
+
+def _editor_model(settings: Settings, override: dict | None = None):
+    """The model that edits, when the studio is set to let one."""
+    if settings.cut_engine != "editor":
+        return None
+    return build_model(settings, override)
+
+
+def _if_match(request: Request) -> str | None:
+    return (request.headers.get("If-Match") or "").strip('"') or None
+
+
+def _timeline_state(context: ProjectContext) -> dict | None:
+    try:
+        state = context.documents.read(context.project, "timeline.json")
+    except NotFound:
+        return None
+    return {"etag": state.etag, "revision": state.revision}
+
+
+@router.get("/api/projects/{slug}/cut")
+def read_plan(
+    response: Response,
+    context: ProjectContext = Depends(project_context),
+    storage: ObjectStorage = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """The current proposal, or what is missing before there can be one.
+
+    With it, the plan's etag (for `If-Match` on edits) and the applied
+    timeline's revision, so the editor can tell when the two have drifted
+    apart — an old revision restored, a file edited by hand.
+    """
+    context.require("document:read")
+    if not cuts.has_analysis(context.session, context.project):
+        return {
+            "state": "senza-analisi", "plan": None, "analysis": None,
+            "media": media_for(context, storage, settings),
+        }
+    analysis = cuts.load_analysis(context.session, context.project)
+    media = media_for(context, storage, settings)
+    summary = {
+        "source": analysis.source,
+        "duration": analysis.duration,
+        "words": len(analysis.words),
+        "provider": analysis.provider,
+        "generatedAt": analysis.generated_at,
+        "proxyUrl": media.get("proxy") or _proxy_url(context, storage),
+    }
+    try:
+        plan = cuts.load_plan(context.session, context.project)
+    except NotFound:
+        return {"state": "senza-piano", "analysis": summary, "plan": None}
+    etag = cuts.plan_etag(context.session, context.project)
+    if etag:
+        response.headers["ETag"] = f'"{etag}"'
+    return {
+        "state": plan.status,
+        "analysis": summary,
+        "plan": plan.as_dict(),
+        "etag": etag,
+        "timeline": _timeline_state(context),
+        "media": media,
+    }
+
+
+@router.get("/api/projects/{slug}/cut/transcript")
+def read_transcript(context: ProjectContext = Depends(project_context)) -> dict:
+    """Word level timings, which the timeline needs to draw the speech.
+
+    The *prepared* words — trimmed to the silences the audio measured — with
+    the same indices the plan uses. Served raw, they disagreed with the plan by
+    the width of a pause, and a boundary snapped to a raw word edge was a
+    boundary the server refused as landing inside a word.
+    """
+    context.require("document:read")
+    analysis = align.prepare(cuts.load_analysis(context.session, context.project))
+    return {
+        "duration": analysis.duration,
+        "words": [word.as_dict() for word in analysis.words],
+        "silences": [silence.as_dict() for silence in analysis.silences],
+    }
+
+
+@router.post("/api/projects/{slug}/cut/analyze")
+def start_analysis(
+    payload: dict = Body(default={}), context: ProjectContext = Depends(project_context)
+) -> dict:
+    """Queue the transcription. The worker does the slow part."""
+    context.require("job:create")
+    job = job_service.enqueue(
+        context.session,
+        context.project,
+        kind="analyze",
+        payload={"source": (payload or {}).get("source") or ""},
+        actor=context.user,
+    )
+    from skyground.api import serializers
+
+    return serializers.job_payload(job)
+
+
+@router.post("/api/projects/{slug}/cut/propose")
+def propose(
+    payload: dict = Body(default={}),
+    context: ProjectContext = Depends(project_context),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Rebuild the proposal.
+
+    Answers given by hand are carried over by default — overruling somebody's
+    choice because they pressed regenerate would be the worst kind of surprise.
+    `keepAnswers: false` starts from the material alone, which is the only way
+    back once a choice has been made and turns out to have been wrong.
+    """
+    context.require("document:write")
+    plan = cuts.propose(
+        context.session,
+        context.project,
+        actor=context.user,
+        adviser=build_adviser(settings),
+        model=_editor_model(settings, (payload or {}).get("editor")),
+        keep_answers=bool((payload or {}).get("keepAnswers", True)),
+    )
+    return {"state": plan.status, "plan": plan.as_dict()}
+
+
+@router.post("/api/projects/{slug}/cut/full")
+def full_cut(
+    payload: dict = Body(default={}),
+    context: ProjectContext = Depends(project_context),
+) -> dict:
+    """Queue the whole thing: hear, decide, cut, rebuild, render, publish.
+
+    `editor` picks the model for this run; `render: false` stops before the
+    render; `reanalyze: true` transcribes again even when an analysis exists.
+    """
+    context.require("job:create")
+    job = job_service.enqueue(
+        context.session,
+        context.project,
+        kind="full",
+        payload={k: v for k, v in (payload or {}).items() if k in ("editor", "render", "reanalyze", "fresh")},
+        actor=context.user,
+        max_attempts=1,
+    )
+    from skyground.api import serializers
+
+    return serializers.job_payload(job)
+
+
+@router.post("/api/projects/{slug}/cut/questions/{question_id}")
+def answer_question(
+    question_id: str,
+    payload: dict = Body(...),
+    context: ProjectContext = Depends(project_context),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Resolve one ambiguity. The plan is rebuilt around the answer."""
+    context.require("document:write")
+    option = (payload or {}).get("option")
+    if not option:
+        raise ValidationError("indica quale opzione hai scelto")
+    plan = cuts.answer(
+        context.session,
+        context.project,
+        question_id,
+        option,
+        actor=context.user,
+        adviser=build_adviser(settings),
+        model=_editor_model(settings),
+    )
+    return {"state": plan.status, "plan": plan.as_dict()}
+
+
+@router.post("/api/projects/{slug}/cut/edits")
+def edit_plan(
+    request: Request,
+    response: Response,
+    payload: dict = Body(default={}),
+    context: ProjectContext = Depends(project_context),
+) -> dict:
+    """The cut as a person left it on the timeline.
+
+    `kept` is the ordered list of kept word ranges, each with the seconds its
+    edges were dragged to; `fromTimeline: true` takes the applied timeline
+    instead, which is how a restored revision becomes editable again. `If-Match`
+    carries the plan's etag: a stale one is refused with 409 and the current
+    plan, so two tabs never overwrite each other unawares.
+    """
+    context.require("document:write")
+    base_etag = _if_match(request)
+    notes: list[str] = []
+    if (payload or {}).get("fromTimeline"):
+        plan, notes = cuts.edit_from_timeline(
+            context.session, context.project, context.workspace,
+            actor=context.user, base_etag=base_etag,
+        )
+    else:
+        raw = (payload or {}).get("kept")
+        if not isinstance(raw, list):
+            raise ValidationError("indica `kept`, la lista dei pezzi tenuti, oppure `fromTimeline`")
+        kept = [manual.Kept.from_dict(item) for item in raw]
+        plan = cuts.edit(
+            context.session, context.project, kept,
+            actor=context.user, base_etag=base_etag, workspace=context.workspace,
+        )
+    etag = cuts.plan_etag(context.session, context.project)
+    response.headers["ETag"] = f'"{etag}"'
+    return {"state": plan.status, "plan": plan.as_dict(), "etag": etag, "notes": notes}
+
+
+@router.post("/api/projects/{slug}/cut/apply")
+def apply_plan(
+    request: Request,
+    payload: dict = Body(default={}),
+    context: ProjectContext = Depends(project_context),
+) -> dict:
+    """Turn an answered plan into the project's timeline.
+
+    `rebuild: true` also queues everything downstream — picture and sound,
+    composition, checks and (unless `render: false`) the film — so that one
+    click is the whole job. The revision number comes back at once; the job
+    reports on its own.
+    """
+    context.require("document:write")
+    result = cuts.apply(
+        context.session, context.project, context.workspace,
+        actor=context.user, base_etag=_if_match(request),
+    )
+    if (payload or {}).get("rebuild"):
+        context.require("job:create")
+        job = job_service.enqueue(
+            context.session,
+            context.project,
+            kind="rebuild",
+            payload={
+                "render": bool((payload or {}).get("render", True)),
+                "timelineRevision": result["revision"],
+            },
+            actor=context.user,
+            max_attempts=1,
+        )
+        from skyground.api import serializers
+
+        result["job"] = serializers.job_payload(job)
+    result["etag"] = cuts.plan_etag(context.session, context.project)
+    return result
+
+
+@router.get("/api/projects/{slug}/cut/media")
+def read_media(
+    context: ProjectContext = Depends(project_context),
+    storage: ObjectStorage = Depends(get_storage),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Fresh links to the proxy, the peaks and the thumbnail sheets — or,
+    when the worker has not made them yet, the job that is making them."""
+    context.require("document:read")
+    return media_for(context, storage, settings)
+
+
+@router.post("/api/projects/{slug}/cut/media")
+def make_media(context: ProjectContext = Depends(project_context)) -> dict:
+    """Queue the proxy job, unless one is already pending."""
+    context.require("job:create")
+    from skyground.api import serializers
+
+    pending = _pending_proxy_job(context)
+    if pending is not None:
+        return serializers.job_payload(pending)
+    job = job_service.enqueue(
+        context.session, context.project, kind="proxy", payload={}, actor=context.user,
+    )
+    return serializers.job_payload(job)
+
+
+def _pending_proxy_job(context: ProjectContext):
+    for job in job_service.list_for_project(context.session, context.project, limit=20):
+        if job.kind == "proxy" and job.status in ("queued", "running"):
+            return job
+    return None
+
+
+def media_for(context: ProjectContext, storage: ObjectStorage, settings: Settings) -> dict:
+    """What the timeline draws with, signed for the length of a session.
+
+    The manifest is the source of truth: it names the keys, and the links are
+    minted here at request time, so a client that comes back after the links
+    have expired asks again and gets new ones.
+    """
+    import json
+    import time
+
+    key = asset_service.object_key(context.project, "proxy/index.json")
+    if not storage.exists(key):
+        from skyground.api import serializers
+
+        pending = _pending_proxy_job(context)
+        return {"ready": False, "job": serializers.job_payload(pending) if pending else None}
+    index = json.loads(storage.get(key).decode("utf-8"))
+    ttl = int(settings.proxy_url_ttl_seconds)
+    now = int(time.time())
+
+    def link(object_key: str) -> str:
+        return storage.signed_url(object_key, expires_in=ttl)
+
+    thumbs = dict(index.get("thumbs", {}))
+    keys = thumbs.pop("keys", [])
+    return {
+        "ready": True,
+        "proxy": link(index["proxy"]["key"]),
+        "codec": index["proxy"].get("codec", "h264"),
+        "fps": index["proxy"].get("fps", 30),
+        "gop": index["proxy"].get("gop", 15),
+        "duration": index.get("duration"),
+        "peaks": link(index["peaks"]["key"]),
+        "peaksRate": index["peaks"].get("rate", 100),
+        "thumbs": {"urls": [link(item) for item in keys], **thumbs},
+        "ttl": ttl,
+        "expiresAt": now + ttl,
+    }
+
+
+def _proxy_url(context: ProjectContext, storage: ObjectStorage) -> str | None:
+    """A browser playable copy of the take, when the worker has made one.
+
+    The camera original is usually HEVC, which no browser decodes; the editor
+    falls back to the original only because a project may already hold an H.264
+    master.
+    """
+    # Asking storage rather than the asset index: the bytes are what the player
+    # needs, and one source of truth cannot disagree with itself.
+    for name in ("source.mp4", "source.webm"):
+        key = asset_service.object_key(context.project, f"proxy/{name}")
+        if storage.exists(key):
+            return storage.signed_url(key)
+    return None

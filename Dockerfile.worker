@@ -1,0 +1,33 @@
+# Render worker: proxies, renders and media checks.
+# It carries FFmpeg and the HyperFrames renderer, which the web service does not need.
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    SKYGROUND_ENV=production \
+    SKYGROUND_WORKSPACE_ROOT=/app
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg nodejs npm ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY alembic.ini studio.py ./
+COPY skyground ./skyground
+COPY projects ./projects
+COPY web ./web
+COPY schema ./schema
+
+RUN useradd --create-home --uid 10001 skyground && chown -R skyground:skyground /app
+USER skyground
+
+CMD ["python", "studio.py", "worker"]

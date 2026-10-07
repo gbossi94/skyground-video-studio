@@ -1,0 +1,474 @@
+"""The editor: the model decides what is said, the code decides where to cut.
+
+These tests use a scripted model — one that answers what the test tells it to —
+because what is under test is everything around the model: that its answer is
+read carefully, repaired when it is malformed, realised into cuts that land in
+silence, read back for review, and never asked twice for the same film.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from skyground.analysis import editor, invariants, pipeline
+from skyground.analysis.models import Analysis, CutPlan, Word
+
+
+def speak(lines: list[str], *, start: float = 0.0, pace: float = 0.32, gap: float = 1.0) -> list[Word]:
+    """Lines of text as timed words: a short gap inside a line, a breath between."""
+    words: list[Word] = []
+    at = start
+    for line in lines:
+        for token in line.split():
+            words.append(Word(t=at, end=at + 0.26, s=token, p=0.95))
+            at += pace
+        at += gap
+    return words
+
+
+def analysis_of(lines: list[str]) -> Analysis:
+    words = speak(lines)
+    return Analysis(source="raw.mov", duration=words[-1].end + 2.0, words=words)
+
+
+class Scripted:
+    """Answers in order; complains if asked more than it was told."""
+
+    name = "finto"
+
+    def __init__(self, *answers: dict):
+        self.answers = list(answers)
+        self.asked: list[tuple[str, str]] = []
+
+    def ask(self, system: str, user: str, schema: dict) -> dict:
+        self.asked.append((system, user))
+        if not self.answers:
+            raise AssertionError("il modello è stato interrogato più del previsto")
+        return self.answers.pop(0)
+
+
+OK = {"verdict": "ok", "revisions": [], "notes": "pulito"}
+
+#: The reference footage's opening, the case the old engine could not see: the
+#: speaker restarts *mid-sentence*, so there is no shared opening to match on.
+OPENING = [
+    "Se il tuo centro estetico è bloccato tra i 10 e i 20 mila euro al mese, sei nel famosissimo fango.",
+    "20 mila euro al mese, sei in quello che io chiamo il fango.",
+    "Non importa quanto premi sull'acceleratore, non ti muovi.",
+]
+
+
+# ------------------------------------------------------------ reading the answer
+
+
+def test_the_transcript_is_shown_with_every_word_numbered():
+    analysis = analysis_of(["ciao a tutti", "oggi parliamo"])
+    from skyground.analysis import align, takes
+
+    prepared = align.prepare(analysis)
+    text = editor.present(prepared.words, takes.build_utterances(prepared.words, gap=0.55))
+    assert "0:ciao 1:a 2:tutti" in text
+    assert "3:oggi 4:parliamo" in text
+
+
+def test_a_clean_answer_becomes_decisions_that_cover_every_word():
+    words = speak(["uno due tre", "quattro cinque"])
+    edit = editor.parse_edit(
+        {"segments": [
+            {"first": 0, "last": 2, "keep": False, "quote": "uno … tre", "reason": "prova abbandonata"},
+            {"first": 3, "last": 4, "keep": True, "quote": "quattro … cinque", "reason": ""},
+        ], "summary": "x"},
+        words,
+    )
+    assert [(d.first, d.last, d.keep) for d in edit.decisions] == [(0, 2, False), (3, 4, True)]
+    assert edit.repairs == []
+
+
+def test_a_gap_in_the_answer_is_kept_not_lost():
+    """The safe way to be wrong: nothing is deleted that nobody decided on."""
+    words = speak(["uno due tre quattro cinque sei"])
+    edit = editor.parse_edit(
+        {"segments": [
+            {"first": 0, "last": 1, "keep": False, "quote": "uno … due", "reason": "x"},
+            {"first": 4, "last": 5, "keep": True, "quote": "cinque … sei", "reason": ""},
+        ], "summary": ""},
+        words,
+    )
+    assert edit.kept(6) == [False, False, True, True, True, True]
+    assert any("non coperte" in line for line in edit.repairs)
+
+
+def test_an_overlap_in_the_answer_is_trimmed_and_noted():
+    words = speak(["uno due tre quattro"])
+    edit = editor.parse_edit(
+        {"segments": [
+            {"first": 0, "last": 2, "keep": True, "quote": "uno … tre", "reason": ""},
+            {"first": 1, "last": 3, "keep": False, "quote": "due … quattro", "reason": "x"},
+        ], "summary": ""},
+        words,
+    )
+    assert edit.kept(4) == [True, True, True, False]
+    assert any("sovrappone" in line for line in edit.repairs)
+
+
+def test_a_miscounted_index_is_corrected_from_the_quote():
+    """The model says 4 and quotes «cinque sei»; «cinque» is at 4 — fine. It
+    says 3 and quotes «cinque sei»: the quote wins, the numbers move."""
+    words = speak(["uno due tre quattro cinque sei sette"])
+    edit = editor.parse_edit(
+        {"segments": [
+            {"first": 0, "last": 2, "keep": True, "quote": "uno … tre", "reason": ""},
+            {"first": 3, "last": 5, "keep": False, "quote": "cinque … sei", "reason": "x"},
+        ], "summary": ""},
+        words,
+    )
+    cut = next(d for d in edit.decisions if not d.keep)
+    assert (cut.first, cut.last) == (4, 5)
+    assert any("trovato" in line for line in edit.repairs)
+
+
+# ------------------------------------------------------------------- the gates
+
+
+def test_content_said_twice_is_found_even_when_the_restart_is_mid_sentence():
+    """The case that put a repetition in the delivered film."""
+    analysis = analysis_of(OPENING)
+    kept = [True] * len(analysis.words)
+    found = editor.repeated_content(analysis.words, kept)
+    assert found, "la ripetizione non è stata vista"
+    assert "mila euro al mese" in found[0]
+
+
+def test_content_said_once_is_not_flagged():
+    analysis = analysis_of(["il tuo centro è bloccato nel fango", "non riesci a vedere una via di uscita"])
+    assert editor.repeated_content(analysis.words, [True] * len(analysis.words)) == []
+
+
+def test_a_lexical_repeat_is_reported_not_decided():
+    """«parte della frase detta bene» twice is content said twice *by the
+    letter*; whether it is a refrain is the reviewer's call, so the gate
+    reports it and cuts nothing."""
+    analysis = analysis_of(["prima parte della frase detta bene", "seconda parte della frase detta bene"])
+    kept = [True] * len(analysis.words)
+    assert editor.repeated_content(analysis.words, kept)
+    assert kept == [True] * len(analysis.words)
+
+
+def test_a_hole_is_measured_in_the_result_not_on_set():
+    """A pause the policy splits is two tenths of a second in the film: no
+    hole. A pause it leaves whole — under a loose project policy — is one."""
+    from skyground.analysis.cut import CutPolicy
+    from skyground.analysis.models import Segment
+
+    words = speak(["uno due", "tre quattro"], gap=1.5)
+    kept = [True] * 4
+    split = [Segment(0.0, 0.6, first_word=0, last_word=1), Segment(2.0, 2.6, first_word=2, last_word=3)]
+    assert editor.internal_holes(words, kept, split) == []
+    whole = [Segment(0.0, 2.6, first_word=0, last_word=3)]
+    loose = CutPolicy(max_pause=3.0)
+    assert editor.internal_holes(words, kept, whole, loose)
+
+
+def test_a_cut_between_words_that_flow_into_each_other_is_reported_with_the_nearest_pauses():
+    """«sei commerciale, | nel mondo della bellezza, stiamo cercando»: the model
+    dropped «nel mondo della bellezza» and the boundary after «commerciale,»
+    had 80ms of transcriber gap and no pause. The word came out broken."""
+    words = [Word(0.0, 0.3, "vendi"), Word(0.3, 0.6, "prodotti,"), Word(0.8, 0.9, "sei"),
+             Word(0.9, 1.6, "commerciale,"), Word(1.68, 1.75, "nel"), Word(1.75, 1.9, "mondo"),
+             Word(1.9, 2.1, "della"), Word(2.1, 2.5, "bellezza,"), Word(2.9, 3.2, "stiamo")]
+    kept = [True, True, True, True, False, False, False, False, True]
+    found = editor.glued_cuts(words, kept)
+    assert len(found) == 1
+    assert "«commerciale,» (3) e «nel» (4)" in found[0]
+    assert "mozzata" in found[0]
+    assert "prima: dopo «prodotti,» (1, 0.20s)" in found[0]
+    assert "dopo: dopo «bellezza,» (7, 0.40s)" in found[0]
+    # A boundary in a real pause is not a finding.
+    assert editor.glued_cuts(words, [True, True, False, False, False, False, False, False, True]) == []
+
+
+def test_a_glued_cut_the_reviewer_left_is_kept_back_to_the_nearest_pause():
+    words = [Word(0.0, 0.3, "vendi"), Word(0.3, 0.6, "prodotti,"), Word(0.8, 0.9, "sei"),
+             Word(0.9, 1.6, "commerciale,"), Word(1.68, 1.75, "nel"), Word(1.75, 1.9, "mondo"),
+             Word(1.9, 2.1, "della"), Word(2.1, 2.5, "bellezza,"), Word(2.9, 3.2, "stiamo")]
+    edit = editor.Edit([editor.Decision(0, 3, True, ""), editor.Decision(4, 7, False, "ridondante"),
+                        editor.Decision(8, 8, True, "")])
+    repaired = editor.unglue(edit, words, len(words))
+    assert repaired.kept(len(words)) == [True] * 9
+    assert repaired.repairs and "4-7" in repaired.repairs[0]
+
+    # A cut that *ends* glued is left alone: the kept word's start sits under
+    # the lead-in and its fade, and what precedes it is usually an abandoned
+    # attempt («se hai un abitudispecialist lavori…») nobody wants back.
+    edit = editor.Edit([editor.Decision(0, 1, True, ""), editor.Decision(2, 3, False, "x"),
+                        editor.Decision(4, 8, True, "")])
+    repaired = editor.unglue(edit, words, len(words))
+    assert repaired.kept(len(words)) == [True, True, False, False, True, True, True, True, True]
+    assert repaired.repairs == []
+
+    # A cut run with a pause inside it is kept back only up to that pause.
+    words2 = [Word(0.0, 0.3, "a"), Word(0.35, 0.6, "b"), Word(0.65, 0.9, "c"), Word(1.5, 1.8, "d"), Word(2.5, 2.8, "e")]
+    edit = editor.Edit([editor.Decision(0, 0, True, ""), editor.Decision(1, 3, False, "x"), editor.Decision(4, 4, True, "")])
+    repaired = editor.unglue(edit, words2, 5)
+    assert repaired.kept(5) == [True, True, True, False, True]
+
+
+def test_a_clip_that_begins_after_a_cut_inside_a_sentence_is_a_candidate():
+    words = speak(["uno due tre quattro. cinque sei"])
+    # Cut «due tre», keep the rest: «quattro.» begins after a cut in the middle
+    # of a sentence — a candidate. «cinque» after «quattro.» would not be.
+    kept = [True, False, False, True, True, True]
+    found = editor.mid_thought_starts(words, kept)
+    assert len(found) == 1 and "quattro" in found[0]
+
+
+# --------------------------------------------------------------- the whole edit
+
+
+def _first_attempt_cut(analysis: Analysis) -> dict:
+    words = analysis.words
+    # Word indices of the second line (the good take) and the third.
+    first_line = len(OPENING[0].split())
+    second_line = len(OPENING[1].split())
+    return {"segments": [
+        {"first": 0, "last": first_line - 1, "keep": False,
+         "quote": "Se … fango.", "reason": "prima ripresa dell'apertura, la seconda è più pulita"},
+        {"first": first_line, "last": first_line + second_line - 1, "keep": True,
+         "quote": "20 … fango.", "reason": ""},
+        {"first": first_line + second_line, "last": len(words) - 1, "keep": True,
+         "quote": "Non … muovi.", "reason": ""},
+    ], "summary": "apertura pulita"}
+
+
+def test_the_model_edits_and_the_code_realises_it():
+    analysis = analysis_of(OPENING)
+    model = Scripted(_first_attempt_cut(analysis), OK)
+
+    plan = pipeline.propose(analysis, model=model)
+
+    assert plan.status == "ready"
+    first_line = len(OPENING[0].split())
+    assert plan.segments[0].first_word == first_line, "il montaggio non comincia dalla ripresa buona"
+    assert all(not u.kept for u in plan.utterances if u.first_word == 0)
+    ok, problems = invariants.applicable(plan, analysis)
+    assert ok, problems
+    assert plan.editor["model"] == "finto"
+    assert plan.editor["decisions"], "l'edit del modello non è sul piano"
+
+
+def test_every_cut_is_a_decision_a_person_can_reverse():
+    analysis = analysis_of(OPENING)
+    plan = pipeline.propose(analysis, model=Scripted(_first_attempt_cut(analysis), OK))
+
+    cuts = [q for q in plan.questions if q.id.startswith("edit:")]
+    assert len(cuts) == 1
+    assert cuts[0].answered_by == "motore"
+    assert cuts[0].answer == "cut"
+    assert "prima ripresa" in cuts[0].context
+    assert any(o.id == "keep" for o in cuts[0].options)
+
+
+def test_the_review_can_send_the_edit_back():
+    """The model keeps both attempts; the gate sees the repeat; the review
+    cuts the first. The gate's finding must reach the reviewer."""
+    analysis = analysis_of(OPENING)
+    first_line = len(OPENING[0].split())
+    keeps_everything = {"segments": [
+        {"first": 0, "last": len(analysis.words) - 1, "keep": True, "quote": "Se … muovi.", "reason": ""}
+    ], "summary": ""}
+    revise = {"verdict": "revise", "notes": "apertura detta due volte",
+              "revisions": [{"first": 0, "last": first_line - 1, "action": "cut",
+                             "reason": "ripetizione dell'apertura"}]}
+    model = Scripted(keeps_everything, revise, OK)
+
+    plan = pipeline.propose(analysis, model=model)
+
+    review_prompt = model.asked[1][1]
+    assert "detto due volte" in review_prompt, "la segnalazione automatica non è arrivata alla rilettura"
+    assert plan.segments[0].first_word == first_line
+    assert any("rilettura" in q.context for q in plan.questions)
+    assert len(plan.editor["reviews"]) == 2
+
+
+def test_answering_does_not_ask_the_model_again():
+    analysis = analysis_of(OPENING)
+    model = Scripted(_first_attempt_cut(analysis), OK)
+    plan = pipeline.propose(analysis, model=model)
+    question = next(q for q in plan.questions if q.id.startswith("edit:"))
+
+    # The scripted model has no answers left: any further question would fail.
+    restored = pipeline.answer(analysis, plan, question.id, "keep", answered_by="gabriele@skyground.online", model=model)
+
+    assert restored.segments[0].first_word == 0, "la risposta non ha rimesso il pezzo"
+    kept = next(q for q in restored.questions if q.id == question.id)
+    assert kept.answer == "keep"
+    assert kept.answered_by == "gabriele@skyground.online"
+    assert restored.editor["decisions"] == plan.editor["decisions"]
+
+
+def test_a_persons_answer_survives_a_regenerate():
+    analysis = analysis_of(OPENING)
+    plan = pipeline.propose(analysis, model=Scripted(_first_attempt_cut(analysis), OK))
+    question = next(q for q in plan.questions if q.id.startswith("edit:"))
+    answered = pipeline.answer(analysis, plan, question.id, "keep", answered_by="g@x")
+
+    again = pipeline.propose(analysis, model=Scripted(_first_attempt_cut(analysis), OK),
+                             decisions=pipeline.decisions_from(answered))
+
+    assert again.segments[0].first_word == 0
+
+
+def test_a_refusal_or_truncation_is_an_error_not_a_silent_fallback():
+    class Refuses:
+        name = "rifiuta"
+
+        def ask(self, *_):
+            from skyground.errors import ConfigurationError
+            raise ConfigurationError("il modello ha rifiutato")
+
+    from skyground.errors import ConfigurationError
+
+    with pytest.raises(ConfigurationError):
+        pipeline.propose(analysis_of(OPENING), model=Refuses())
+
+
+def test_the_plan_round_trips_through_json():
+    analysis = analysis_of(OPENING)
+    plan = pipeline.propose(analysis, model=Scripted(_first_attempt_cut(analysis), OK))
+    again = CutPlan.from_dict(plan.as_dict())
+    assert again.editor == plan.editor
+    assert [s.first_word for s in again.segments] == [s.first_word for s in plan.segments]
+
+
+def test_the_editor_policy_keeps_the_speakers_rhythm():
+    """A join is a clause pause, not a hole and not a snap: the first version
+    squeezed every join to 0.20s and split every pause over 0.40, and three
+    natural pauses in a row came out as machine-gun cuts. And the lead-out has
+    to be long enough that the last syllable of a word is never clipped."""
+    join = editor.EDITOR_POLICY.lead_in + editor.EDITOR_POLICY.lead_out
+    assert 0.35 <= join <= editor.HOLE
+    assert editor.EDITOR_POLICY.max_pause <= editor.HOLE
+    assert editor.EDITOR_POLICY.lead_out >= 0.25
+
+
+# ------------------------------------------------------------ a second model
+
+
+
+    def __post_init__(self):
+        pass
+
+
+def _fake_client(text: str, *, reject_reasoning: bool = False):
+    calls: list[dict] = []
+
+    class Responses:
+        @staticmethod
+        def create(**kwargs):
+            calls.append(kwargs)
+            if reject_reasoning and "reasoning" in kwargs:
+                raise RuntimeError("Unsupported parameter: 'reasoning' is not supported with this model.")
+
+            class Response:
+                model = kwargs["model"] + "-2026-09-01"
+                output_text = text
+                incomplete_details = None
+
+            return Response()
+
+    class Client:
+        responses = Responses()
+
+    return Client(), calls
+
+
+def test_the_openai_editor_asks_the_same_question_in_the_same_shape():
+    client, calls = _fake_client('{"segments": [], "summary": "vuoto"}')
+    model = editor.OpenAIModel("", model="gpt-6", client=client)
+
+    answer = model.ask("sistema", "0:ciao", editor.DECIDE_SCHEMA)
+
+    assert answer == {"segments": [], "summary": "vuoto"}
+    sent = calls[0]
+    assert sent["model"] == "gpt-6"
+    assert sent["instructions"] == "sistema" and sent["input"] == "0:ciao"
+    assert sent["text"]["format"]["schema"] is editor.DECIDE_SCHEMA
+    assert sent["text"]["format"]["strict"] is True
+    assert model.served_by == "gpt-6-2026-09-01"
+
+
+def test_a_model_without_a_reasoning_dial_is_asked_again_without_it():
+    client, calls = _fake_client('{"verdict": "ok", "revisions": [], "notes": ""}', reject_reasoning=True)
+    model = editor.OpenAIModel("", model="gpt-6", client=client)
+
+    model.ask("s", "u", editor.REVIEW_SCHEMA)
+
+    assert "reasoning" in calls[0] and "reasoning" not in calls[1]
+
+
+def test_the_openai_editor_drives_the_same_pipeline():
+    analysis = analysis_of(OPENING)
+    import json as _json
+
+    answers = [_json.dumps(_first_attempt_cut(analysis)), _json.dumps(OK)]
+    calls: list[dict] = []
+
+    class Responses:
+        @staticmethod
+        def create(**kwargs):
+            calls.append(kwargs)
+
+            class Response:
+                model = "gpt-6"
+                output_text = answers.pop(0)
+                incomplete_details = None
+
+            return Response()
+
+    class Client:
+        responses = Responses()
+
+    plan = pipeline.propose(analysis, model=editor.OpenAIModel("", client=Client()))
+
+    assert plan.editor["model"] == "gpt-6"
+    assert plan.segments[0].first_word == len(OPENING[0].split())
+    assert len(calls) == 2
+
+
+def test_build_model_can_be_overridden_for_one_run():
+    from dataclasses import replace
+
+    from skyground.config import Settings, get_settings
+
+    base = get_settings()
+    settings = replace(base, adviser_provider="claude", adviser_api_key="k", openai_api_key="o",
+                       editor_provider="claude", editor_model="claude-opus-5")
+    assert isinstance(editor.build_model(settings), editor.ClaudeModel)
+    other = editor.build_model(settings, {"provider": "openai", "model": "gpt-6"})
+    assert isinstance(other, editor.OpenAIModel) and other.model == "gpt-6"
+
+
+def test_an_unknown_openai_model_names_the_ones_the_key_can_use():
+    """A 404 from OpenAI used to cross the server as a bare 500. Now it says
+    which models the key can call — the newest model's exact name is the one
+    thing nobody remembers correctly."""
+    from skyground.errors import ConfigurationError
+
+    class Models:
+        @staticmethod
+        def list():
+            class M:
+                def __init__(self, i): self.id = i
+            return [M("gpt-5.4"), M("gpt-5.4-mini"), M("text-embedding-3"), M("gpt-6-preview")]
+
+    class Responses:
+        @staticmethod
+        def create(**kwargs):
+            raise RuntimeError("Error code: 404 - {'error': {'code': 'model_not_found', 'message': 'The model `gpt-6` does not exist'}}")
+
+    class Client:
+        responses = Responses()
+        models = Models()
+
+    with pytest.raises(ConfigurationError, match="gpt-6-preview"):
+        editor.OpenAIModel("", model="gpt-6", client=Client()).ask("s", "u", editor.DECIDE_SCHEMA)

@@ -1,0 +1,76 @@
+# One service that runs both halves of the studio.
+#
+# The split web/worker deployment in render.yaml is the right shape at scale,
+# but it requires object storage: a Render disk attaches to exactly one service,
+# so two services cannot share one. This image keeps the API and the worker in
+# the same container, which lets a single persistent disk hold the media and
+# removes the dependency on an external bucket. Switch to render.yaml when the
+# render queue deserves its own machine.
+
+FROM node:22-slim AS editor
+WORKDIR /build
+COPY app/package.json app/package-lock.json ./app/
+RUN cd app && npm ci
+COPY app ./app
+RUN cd app && npm run build
+
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    SKYGROUND_ENV=production \
+    SKYGROUND_WORKSPACE_ROOT=/var/skyground/workspace
+
+WORKDIR /app
+
+# FFmpeg for the analysis and the proxies; Node for the HyperFrames renderer;
+# Chromium for the renderer's browser. HyperFrames would otherwise download a
+# headless shell into the home directory on first use — a download per deploy,
+# against shared libraries a slim image does not have. The system package
+# brings the libraries with it, and the path is handed over below.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg ca-certificates chromium fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+# Node 22, taken from the stage that already has it: HyperFrames refuses to
+# run on the Node 20 that Debian ships, and it said so only at the first
+# render in production.
+COPY --from=editor /usr/local/bin/node /usr/local/bin/node
+COPY --from=editor /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+    && node --version && npm --version
+ENV HYPERFRAMES_BROWSER_PATH=/usr/bin/chromium \
+    HYPERFRAMES_NO_TELEMETRY=1 \
+    HYPERFRAMES_NO_UPDATE_CHECK=1 \
+    HYPERFRAMES_FONT_CACHE_DIR=/var/skyground/.cache/hyperframes/fonts \
+    HYPERFRAMES_EXTRACT_CACHE_DIR=/var/skyground/.cache/hyperframes/extract
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+    # Che la trascrizione sia importabile si scopre qui, dove la build fallisce,
+    # e non più tardi dentro un job in coda. faster-whisper importa `requests`
+    # senza dichiararlo: in un ambiente di sviluppo arriva per altre strade, in
+    # un'immagine pulita no, e il difetto si è visto solo in produzione.
+    && python -c "from faster_whisper import WhisperModel; import anthropic, openai"
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY alembic.ini studio.py ./
+COPY skyground ./skyground
+COPY projects ./projects
+COPY web ./web
+COPY schema ./schema
+COPY --from=editor /build/web/app ./web/app
+COPY deploy/combined-entrypoint.sh ./deploy/combined-entrypoint.sh
+RUN chmod +x ./deploy/combined-entrypoint.sh
+
+RUN useradd --create-home --uid 10001 skyground && chown -R skyground:skyground /app
+USER skyground
+
+EXPOSE 10000
+
+CMD ["./deploy/combined-entrypoint.sh"]

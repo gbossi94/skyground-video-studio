@@ -1,0 +1,74 @@
+# Render blueprint — un servizio solo, con disco.
+#
+# Questa è la forma che si mette online senza dipendere da nessun altro
+# fornitore: API e worker nello stesso container, i media su un disco
+# persistente, PostgreSQL gestito da Render. Nessuna chiave da procurarsi,
+# nessun bucket da creare.
+#
+# Il motivo per cui web e worker stanno insieme è concreto: un disco Render si
+# monta su un servizio solo, quindi due servizi separati non possono condividere
+# i media e servirebbe uno storage a oggetti. Quando la coda di rendering
+# meriterà una macchina sua, si passa a deploy/render-split.yaml, che separa i
+# due e mette i media su Cloudflare R2.
+
+databases:
+  - name: skyground-db
+    databaseName: skyground_db
+    plan: basic-256mb
+    postgresMajorVersion: "18"
+    region: frankfurt
+    diskSizeGB: 1
+
+services:
+  - type: web
+    name: skyground-studio
+    runtime: docker
+    dockerfilePath: ./Dockerfile.combined
+    plan: standard # la trascrizione locale vuole memoria: starter non basta
+    region: frankfurt
+    healthCheckPath: /healthz
+    # Il disco tiene girato, proxy e render. 20 GB stanno su qualche ora di
+    # materiale: si alza senza perdere nulla, non si abbassa.
+    disk:
+      name: skyground-media
+      mountPath: /var/skyground
+      sizeGB: 20
+    envVars:
+      - key: SKYGROUND_ENV
+        value: production
+      # I pesi del modello di trascrizione stanno sul disco montato: il
+      # filesystem del container viene buttato a ogni deploy, e con lui mezzo
+      # giga di modello da riscaricare.
+      - key: SKYGROUND_MODEL_CACHE_ROOT
+        value: /var/skyground/models
+      - key: SKYGROUND_DATABASE_URL
+        fromDatabase:
+          name: skyground-db
+          property: connectionString
+      # Firma i cookie di sessione e i link ai media. Generata da Render.
+      - key: SKYGROUND_SECRET_KEY
+        generateValue: true
+      - key: SKYGROUND_AUTH_MODE
+        value: password
+      - key: SKYGROUND_COOKIE_SECURE
+        value: "true"
+      # I media stanno sul disco montato qui sopra: è ciò che rende vera la
+      # dichiarazione di durabilità, e senza il disco l'app rifiuta di partire.
+      - key: SKYGROUND_STORAGE_BACKEND
+        value: local
+      - key: SKYGROUND_STORAGE_ROOT
+        value: /var/skyground/storage
+      - key: SKYGROUND_STORAGE_DURABLE
+        value: "true"
+      # Trascrizione dentro il worker: nessuna chiave, nessun costo al minuto.
+      # Per passare a un'API, metti 'deepgram' e aggiungi la chiave.
+      - key: SKYGROUND_TRANSCRIPTION_PROVIDER
+        value: local
+      - key: SKYGROUND_TRANSCRIPTION_MODEL
+        value: small
+      # Adviser facoltativo: segnala le riformulazioni che il confronto
+      # lessicale non vede. Alza solo domande, quindi si può lasciare spento.
+      - key: SKYGROUND_ADVISER_PROVIDER
+        value: none
+      - key: SKYGROUND_ADVISER_API_KEY
+        sync: false

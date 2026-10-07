@@ -37,7 +37,10 @@ python3 studio.py validate beauty-centers-growth-01
 python3 studio.py sync beauty-centers-growth-01
 python3 studio.py build-source beauty-centers-growth-01
 python3 studio.py render beauty-centers-growth-01
+python3 studio.py export beauty-centers-growth-01   # FCPXML per Resolve/Premiere/Final Cut, SRT dei sottotitoli; --format capcut scrive la bozza CapCut (serve una bozza campione)
 python3 studio.py serve
 ```
+
+Questi comandi funzionano con la sola libreria standard. L'applicazione cloud aggiunge `db`, `users`, `projects` e `worker`; il confine tecnico, il modello dati e i permessi sono descritti in `docs/ARCHITETTURA.md`, la migrazione in `docs/MIGRAZIONE.md`.
 
 Quando modifichi una timeline, aggiorna gli `output_start` in sequenza e la durata totale. Se cambi la durata, ricontrolla cards, captions e angles. Dopo un render, verifica sempre decodifica, dimensioni, frame rate, audio e durata.

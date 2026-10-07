@@ -1,0 +1,25 @@
+# Runtime dependencies of the web application and the worker.
+# The editorial CLI (validate, sync, build-source, render) needs none of these.
+alembic==1.14.0
+# Speech to text inside the worker, so an instance can listen to its own footage
+# without anybody buying a transcription key. Heavy — it brings CTranslate2 and
+# the model weights — which is why the service runs on a plan with the memory
+# for it. `SKYGROUND_TRANSCRIPTION_PROVIDER=deepgram` replaces it with an API.
+faster-whisper==1.1.1
+# faster-whisper importa `requests` senza dichiararlo, e huggingface-hub 1.x non
+# lo porta più con sé. In un ambiente di sviluppo arriva comunque, per qualche
+# altra strada; in un'immagine pulita no, e il worker muore all'import. Va
+# dichiarato qui, dove l'immagine lo legge.
+requests==2.32.3
+# Il consulente semantico: legge la trascrizione e segnala le riformulazioni che
+# il confronto fra parole non può vedere. Resta spento senza una chiave, ma se
+# il pacchetto non c'è il worker muore in coda invece di dirlo all'avvio.
+anthropic==1.5.0
+boto3==1.35.90
+fastapi==0.115.12
+psycopg[binary]==3.2.3
+pydantic==2.10.6
+SQLAlchemy==2.0.36
+uvicorn[standard]==0.34.0
+# Il secondo montatore, per confrontare due modelli sullo stesso girato.
+openai==2.9.0
